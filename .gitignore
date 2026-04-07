@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Large / sensitive data (do not commit)
+_vector_index.pkl
+data/_vector_index.pkl
+*.pdf
+
+# Local asset (do not commit)
+HEP logo white.png

@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HEP Research Library</title>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;600&family=Source+Sans+Pro:ital,wght@0,300;0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --deep-purple:   #280F2E;
+  --mid-purple:    #8B388D;
+  --light-purple:  #E1CBE0;
+  --off-white:     #FAFAF7;
+  --gold:          #FFC05C;
+  --border:        rgba(139,56,141,0.25);
+  --text-muted:    #9a85a0;
+}
+
+body { font-family: 'Source Sans Pro', sans-serif; background: var(--deep-purple); color: var(--off-white); min-height: 100vh; }
+
+header {
+  background: #1c0a22;
+  border-bottom: 3px solid var(--mid-purple);
+  padding: 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 80px;
+}
+
+.header-logo { height: 56px; width: auto; }
+
+.doc-count {
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: rgba(139,56,141,0.15);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 14px;
+  letter-spacing: 0.05em;
+}
+
+.container { max-width: 860px; margin: 0 auto; padding: 48px 20px; }
+
+.accent-bar {
+  height: 3px;
+  background: linear-gradient(90deg, var(--mid-purple), var(--gold));
+  border-radius: 2px;
+  margin-bottom: 36px;
+  opacity: 0.6;
+}
+
+.search-panel {
+  background: #1c0a22;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px;
+  margin-bottom: 28px;
+}
+
+.panel-label {
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 10px;
+}
+
+textarea {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--off-white);
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+  padding: 14px 16px;
+  resize: vertical;
+  min-height: 86px;
+  transition: border-color 0.2s;
+}
+
+textarea::placeholder { color: var(--text-muted); }
+textarea:focus { outline: none; border-color: var(--mid-purple); }
+
+.controls {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+select {
+  flex: 1;
+  min-width: 220px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--off-white);
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 0.9rem;
+  padding: 10px 14px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238B388D' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 12px;
+  padding-right: 36px;
+  cursor: pointer;
+}
+
+select:focus { outline: none; border-color: var(--mid-purple); }
+
+.search-btn {
+  background: var(--mid-purple);
+  border: none;
+  border-radius: 6px;
+  color: var(--off-white);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 10px 32px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  white-space: nowrap;
+}
+
+.search-btn:hover { background: #9d42a0; }
+.search-btn:active { transform: translateY(1px); }
+.search-btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not-allowed; }
+
+.loading {
+  display: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  padding: 10px 0 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.loading::before {
+  content: "";
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  display: inline-block;
+  border: 4px solid rgba(225,203,224,0.30);
+  border-top-color: var(--gold);
+  border-right-color: rgba(139,56,141,0.95);
+  animation: spin 0.7s linear infinite;
+  filter: drop-shadow(0 0 12px rgba(255,192,92,0.18));
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.error {
+  background: rgba(200,50,50,0.15);
+  border: 1px solid rgba(200,50,50,0.4);
+  border-radius: 8px;
+  color: #f4a0a0;
+  font-size: 0.9rem;
+  padding: 16px;
+  display: none;
+  margin-bottom: 20px;
+}
+
+.result-panel {
+  background: #1c0a22;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 32px;
+  display: none;
+}
+
+.result-panel .panel-label { margin-bottom: 18px; }
+
+.answer-text { font-size: 1.05rem; line-height: 1.75; color: var(--off-white); }
+.answer-text p { margin-bottom: 1em; }
+.answer-text p:last-child { margin-bottom: 0; }
+.answer-text sup { color: var(--gold); font-size: 0.72rem; font-weight: 600; }
+
+.citations { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
+
+.citations-heading {
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 14px;
+}
+
+.citation-item {
+  display: flex;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(139,56,141,0.12);
+}
+
+.citation-item:last-child { border-bottom: none; }
+
+.citation-num {
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.85rem;
+  color: var(--gold);
+  font-weight: 600;
+  min-width: 28px;
+  padding-top: 1px;
+}
+
+.citation-title { font-size: 0.9rem; color: var(--off-white); margin-bottom: 3px; line-height: 1.4; }
+
+.citation-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.citation-category {
+  background: rgba(139,56,141,0.2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--light-purple);
+  font-size: 0.7rem;
+  padding: 1px 7px;
+}
+
+.stats { font-size: 0.75rem; color: #5a3d5f; text-align: right; margin-top: 16px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="/logo" alt="Hope Education Project" class="header-logo">
+  <div class="doc-count">{{ doc_count }} documents indexed</div>
+</header>
+
+<div class="container">
+
+  <div class="accent-bar"></div>
+
+  <div class="search-panel">
+    <div class="panel-label">Research Question</div>
+    <textarea id="query" placeholder="What does the research say about education interventions reducing trafficking risk in Northern Ghana?"></textarea>
+    <div class="controls">
+      <select id="category">
+        <option value="All">All categories</option>
+        <option>Ghana</option>
+        <option>Nigeria</option>
+        <option>West Africa Regional</option>
+        <option>Gulf and Middle East</option>
+        <option>Child Trafficking and Exploitation</option>
+        <option>Sex Trafficking and Sex Work</option>
+        <option>Education and Prevention</option>
+        <option>Survivor Experience and Response</option>
+        <option>Digital Threats and Scamming</option>
+        <option>Legal and Policy Frameworks</option>
+        <option>UN and International Bodies</option>
+        <option>Research and Data</option>
+        <option>Tamale and Northern Ghana</option>
+      </select>
+      <button class="search-btn" id="searchBtn" onclick="doSearch()">Search Library</button>
+    </div>
+    <div class="loading" id="loading" role="status" aria-live="polite">
+      <div>Searching {{ doc_count }} documents and generating answer...</div>
+    </div>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <div class="result-panel" id="resultBox">
+    <div class="panel-label">Answer</div>
+    <div class="answer-text" id="answerText"></div>
+    <div class="citations">
+      <div class="citations-heading">Sources</div>
+      <div id="citationList"></div>
+    </div>
+    <div class="stats" id="stats"></div>
+  </div>
+
+</div>
+
+<script>
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function formatCitationsAsSup(text) {
+  const s = String(text);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch !== '[') {
+      out += ch;
+      continue;
+    }
+
+    let j = i + 1;
+    while (j < s.length) {
+      const c = s[j];
+      if (c < '0' || c > '9') break;
+      j++;
+    }
+
+    if (j > i + 1 && j < s.length && s[j] === ']') {
+      const num = s.slice(i + 1, j);
+      out += '<sup>[' + num + ']</sup>';
+      i = j;
+      continue;
+    }
+
+    out += ch;
+  }
+  return out;
+}
+
+function formatAnswerToHtml(answerText) {
+  const escaped = escapeHtml(answerText);
+  const withSupCites = formatCitationsAsSup(escaped);
+  return withSupCites
+    .split('\n\n').map(p => p.trim()).filter(Boolean)
+    .map(p => '<p>' + p + '</p>').join('');
+}
+
+async function doSearch() {
+  const query = document.getElementById('query').value.trim();
+  if (!query) return;
+  const category = document.getElementById('category').value;
+  const btn = document.getElementById('searchBtn');
+  const loading = document.getElementById('loading');
+  const resultBox = document.getElementById('resultBox');
+  const errorDiv = document.getElementById('error');
+
+  btn.disabled = true;
+  loading.style.display = 'inline-flex';
+  resultBox.style.display = 'none';
+  errorDiv.style.display = 'none';
+
+  try {
+    const res = await fetch('/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, category })
+    });
+    const data = await res.json();
+    if (data.error) {
+      errorDiv.textContent = data.error;
+      errorDiv.style.display = 'block';
+    } else {
+      const formatted = formatAnswerToHtml(data.answer);
+      document.getElementById('answerText').innerHTML = formatted;
+
+      document.getElementById('citationList').innerHTML =
+        data.citations.map(c => `
+          <div class="citation-item">
+            <div class="citation-num">[${c.index}]</div>
+            <div>
+              <div class="citation-title">${c.title}</div>
+              <div class="citation-meta">
+                <span>${c.authors}</span>
+                <span>&middot;</span>
+                <span>${c.year}</span>
+                <span class="citation-category">${c.category}</span>
+              </div>
+            </div>
+          </div>`).join('');
+
+      document.getElementById('stats').textContent =
+        `${data.citations.length} sources reviewed`;
+      resultBox.style.display = 'block';
+      resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  } catch(e) {
+    errorDiv.textContent = 'Search failed. Is the server running?';
+    errorDiv.style.display = 'block';
+  }
+  btn.disabled = false;
+  loading.style.display = 'none';
+}
+
+document.getElementById('query').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.metaKey) doSearch();
+});
+</script>
+</body>
+</html>
