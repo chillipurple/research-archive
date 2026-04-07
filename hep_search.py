@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 import numpy as np
 from pathlib import Path
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, abort
 import anthropic
 import fitz  # pymupdf
 
@@ -277,12 +277,21 @@ def get_index():
 
 @app.route("/")
 def home():
-    idx = get_index()
-    return render_template("index.html", doc_count=len(idx["documents"]))
+    # Render the UI even if the index isn't available yet (e.g. first boot on Railway
+    # before HEP_INDEX_URL is configured, or while download fails).
+    doc_count = "…"
+    try:
+        idx = get_index()
+        doc_count = len(idx["documents"])
+    except Exception as e:
+        print(f"Index not available for homepage: {e}")
+    return render_template("index.html", doc_count=doc_count)
 
 
 @app.route("/logo")
 def serve_logo():
+    if not LOGO_PATH.exists():
+        abort(404)
     return send_file(str(LOGO_PATH), mimetype="image/png")
 
 
