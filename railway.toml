@@ -1,0 +1,11 @@
+[build]
+builder = "nixpacks"
+nixpacksConfigPath = "nixpacks.toml"
+
+[deploy]
+startCommand = "gunicorn hep_search:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 180"
+healthcheckPath = "/"
+healthcheckTimeout = 180
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
