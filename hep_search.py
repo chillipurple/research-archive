@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 import numpy as np
 from pathlib import Path
-from flask import Flask, request, jsonify, render_template, send_file, abort
+from flask import Flask, request, jsonify, render_template, send_file, abort, redirect
 import anthropic
 import fitz  # pymupdf
 
@@ -300,6 +300,9 @@ def home():
 
 @app.route("/logo")
 def serve_logo():
+    logo_url = os.environ.get("HEP_LOGO_URL", "").strip()
+    if logo_url:
+        return redirect(logo_url, code=302)
     if not LOGO_PATH.exists():
         abort(404)
     return send_file(str(LOGO_PATH), mimetype="image/png")
