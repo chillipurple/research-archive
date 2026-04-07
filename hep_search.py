@@ -89,7 +89,16 @@ def _download_file(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     try:
-        with urllib.request.urlopen(url, timeout=60) as r, open(tmp, "wb") as f:
+        req = urllib.request.Request(
+            url,
+            headers={
+                # Some CDNs return 403 for unknown/empty user agents.
+                "User-Agent": "Mozilla/5.0 (compatible; HEPResearchLibrary/1.0; +https://hopeeducationproject.org)",
+                "Accept": "*/*",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
             f.write(r.read())
         tmp.replace(dest)
     finally:
