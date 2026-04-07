@@ -54,8 +54,8 @@ def _unauthorized() -> Response:
 def _require_basic_auth():
     if not AUTH_ENABLED:
         return None
-    # Allow unauthenticated health checks if explicitly enabled.
-    if request.path == "/health" and os.environ.get("HEP_HEALTH_PUBLIC", "").strip() in ("1", "true", "True"):
+    # Always allow Railway health checks.
+    if request.path == "/health":
         return None
     auth = request.authorization
     if not auth or auth.username != AUTH_USER or auth.password != AUTH_PASS:
