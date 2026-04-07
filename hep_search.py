@@ -125,13 +125,31 @@ def ensure_index_present() -> None:
         raise RuntimeError(f"Failed to download index from HEP_INDEX_URL: {e}") from e
 
 
+def _load_index_from_disk() -> dict:
+    with open(INDEX_FILE, "rb") as f:
+        return pickle.load(f)
+
+
 def build_index() -> dict:
     # Prefer pre-built index (local or downloaded) when present.
     ensure_index_present()
     if INDEX_FILE.exists():
         print("Loading existing index...")
-        with open(INDEX_FILE, "rb") as f:
-            return pickle.load(f)
+        try:
+            return _load_index_from_disk()
+        except Exception as e:
+            # If the wrong file was downloaded (e.g. URL misconfigured), recover by
+            # deleting and re-downloading from HEP_INDEX_URL.
+            print(f"Failed to load index from disk ({INDEX_FILE}): {e}")
+            try:
+                INDEX_FILE.unlink()
+            except Exception:
+                pass
+            if INDEX_URL:
+                print("Re-downloading index after load failure...")
+                ensure_index_present()
+                return _load_index_from_disk()
+            raise
 
     if RESEARCH_DIR is None or OUTPUT_CSV is None:
         raise RuntimeError(
