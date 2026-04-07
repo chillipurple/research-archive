@@ -20,6 +20,7 @@ Set these environment variables in Railway:
 - **`ANTHROPIC_API_KEY`**: your Claude API key
 - **`HEP_INDEX_URL`**: HTTPS URL to `_vector_index.pkl` in your bucket
 - **`HEP_INDEX_FILE`** (optional): local path to store the downloaded index (default: `./data/_vector_index.pkl`)
+- **`HEP_LOGO_URL`** (optional): public URL to the HEP logo PNG (recommended for cloud, since the logo is not committed)
 
 Optional (local-only):
 

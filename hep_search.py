@@ -289,12 +289,13 @@ def home():
     # Render the UI even if the index isn't available yet (e.g. first boot on Railway
     # before HEP_INDEX_URL is configured, or while download fails).
     doc_count = "…"
+    logo_url = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
     try:
         idx = get_index()
         doc_count = len(idx["documents"])
     except Exception as e:
         print(f"Index not available for homepage: {e}")
-    return render_template("index.html", doc_count=doc_count)
+    return render_template("index.html", doc_count=doc_count, logo_url=logo_url)
 
 
 @app.route("/logo")
