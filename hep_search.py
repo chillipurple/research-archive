@@ -239,6 +239,7 @@ def generate_answer(query: str, results: list) -> dict:
 
     context_parts = []
     citations     = []
+    doc_url_template = os.environ.get("HEP_DOC_URL_TEMPLATE", "").strip()
 
     for i, (score, doc) in enumerate(results, 1):
         meta    = doc["meta"]
@@ -250,7 +251,7 @@ def generate_answer(query: str, results: list) -> dict:
             doc["text"][:1500]
         ]))
         context_parts.append(f"[{i}] {title} ({authors}, {year})\n{excerpt}")
-        citations.append({
+        citation = {
             "index":           i,
             "title":           title,
             "authors":         authors,
@@ -258,7 +259,10 @@ def generate_answer(query: str, results: list) -> dict:
             "filename":        doc["filename"],
             "category":        meta.get("category", ""),
             "relevance_score": round(score, 3)
-        })
+        }
+        if doc_url_template and "{filename}" in doc_url_template:
+            citation["url"] = doc_url_template.replace("{filename}", doc["filename"])
+        citations.append(citation)
 
     context = "\n\n---\n\n".join(context_parts)
 

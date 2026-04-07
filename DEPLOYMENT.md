@@ -21,6 +21,7 @@ Set these environment variables in Railway:
 - **`HEP_INDEX_URL`**: HTTPS URL to `_vector_index.pkl` in your bucket
 - **`HEP_INDEX_FILE`** (optional): local path to store the downloaded index (default: `./data/_vector_index.pkl`)
 - **`HEP_LOGO_URL`** (optional): public URL to the HEP logo PNG (recommended for cloud, since the logo is not committed)
+- **`HEP_DOC_URL_TEMPLATE`** (optional): template for linking citations to documents, using `{filename}` placeholder (e.g. `https://example.com/docs/{filename}`)
 
 Optional (local-only):
 

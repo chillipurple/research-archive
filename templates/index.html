@@ -191,6 +191,8 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 .answer-text p { margin-bottom: 1em; }
 .answer-text p:last-child { margin-bottom: 0; }
 .answer-text sup { color: var(--gold); font-size: 0.72rem; font-weight: 600; }
+.answer-text sup a.cite-link { color: var(--gold); text-decoration: none; }
+.answer-text sup a.cite-link:hover { text-decoration: underline; }
 
 .citations { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
 
@@ -223,6 +225,8 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 }
 
 .citation-title { font-size: 0.9rem; color: var(--off-white); margin-bottom: 3px; line-height: 1.4; }
+.citation-title a { color: var(--off-white); text-decoration: none; }
+.citation-title a:hover { text-decoration: underline; }
 
 .citation-meta {
   font-size: 0.78rem;
@@ -326,7 +330,7 @@ function formatCitationsAsSup(text) {
 
     if (j > i + 1 && j < s.length && s[j] === ']') {
       const num = s.slice(i + 1, j);
-      out += '<sup>[' + num + ']</sup>';
+      out += '<sup><a class="cite-link" href="#cite-' + num + '">[' + num + ']</a></sup>';
       i = j;
       continue;
     }
@@ -374,10 +378,10 @@ async function doSearch() {
 
       document.getElementById('citationList').innerHTML =
         data.citations.map(c => `
-          <div class="citation-item">
+          <div class="citation-item" id="cite-${c.index}">
             <div class="citation-num">[${c.index}]</div>
             <div>
-              <div class="citation-title">${c.title}</div>
+              <div class="citation-title">${c.url ? `<a href="${c.url}" target="_blank" rel="noopener noreferrer">${c.title}</a>` : c.title}</div>
               <div class="citation-meta">
                 <span>${c.authors}</span>
                 <span>&middot;</span>
