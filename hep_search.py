@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 import numpy as np
 from pathlib import Path
-from flask import Flask, request, jsonify, render_template, send_file, abort, redirect
+from flask import Flask, request, jsonify, render_template, send_file, abort, redirect, Response
 import anthropic
 import fitz  # pymupdf
 
@@ -34,6 +34,33 @@ INDEX_FILE = Path(os.environ.get("HEP_INDEX_FILE", str(BASE_DIR / "data" / "_vec
 
 client = anthropic.Anthropic()
 app = Flask(__name__)
+
+# ── Basic Auth (recommended for public deployment) ─────────────────────────────
+
+AUTH_USER = os.environ.get("HEP_AUTH_USER", "").strip()
+AUTH_PASS = os.environ.get("HEP_AUTH_PASS", "").strip()
+AUTH_ENABLED = bool(AUTH_USER and AUTH_PASS)
+
+
+def _unauthorized() -> Response:
+    return Response(
+        "Authentication required",
+        401,
+        {"WWW-Authenticate": 'Basic realm="HEP Research Library"'},
+    )
+
+
+@app.before_request
+def _require_basic_auth():
+    if not AUTH_ENABLED:
+        return None
+    # Allow unauthenticated health checks if explicitly enabled.
+    if request.path == "/health" and os.environ.get("HEP_HEALTH_PUBLIC", "").strip() in ("1", "true", "True"):
+        return None
+    auth = request.authorization
+    if not auth or auth.username != AUTH_USER or auth.password != AUTH_PASS:
+        return _unauthorized()
+    return None
 
 # ── Text and Vector Helpers ───────────────────────────────────────────────────
 
