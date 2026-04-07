@@ -341,6 +341,23 @@ def search_route():
         return jsonify({"error": str(e)})
 
 
+@app.route("/health")
+def health():
+    try:
+        idx = get_index()
+        return jsonify({
+            "ok": True,
+            "index_loaded": True,
+            "documents_indexed": len(idx.get("documents", [])),
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "index_loaded": False,
+            "error": str(e),
+        }), 503
+
+
 @app.route("/rebuild-index", methods=["POST"])
 def rebuild():
     global _index
