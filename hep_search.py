@@ -418,15 +418,9 @@ def get_index():
 
 @app.route("/")
 def home():
-    # Render the UI even if the index isn't available yet (e.g. first boot on Railway
-    # before HEP_INDEX_URL is configured, or while download fails).
-    doc_count = "…"
+    # In Qdrant mode, document count is not loaded from a local pickle index.
+    doc_count = "Qdrant"
     logo_url = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
-    try:
-        idx = get_index()
-        doc_count = len(idx["documents"])
-    except Exception as e:
-        print(f"Index not available for homepage: {e}")
     return render_template("index.html", doc_count=doc_count, logo_url=logo_url)
 
 
@@ -457,19 +451,24 @@ def search_route():
 
 @app.route("/health")
 def health():
-    try:
-        idx = get_index()
-        return jsonify({
-            "ok": True,
-            "index_loaded": True,
-            "documents_indexed": len(idx.get("documents", [])),
-        })
-    except Exception as e:
-        return jsonify({
-            "ok": False,
-            "index_loaded": False,
-            "error": str(e),
-        }), 503
+    qdrant_configured = bool(QDRANT_URL and QDRANT_API_KEY)
+    qdrant_reachable = False
+    qdrant_error = None
+
+    # Health must not depend on local files or legacy pickle index.
+    if qdrant_configured:
+        try:
+            get_qdrant_client().get_collections()
+            qdrant_reachable = True
+        except Exception as e:
+            qdrant_error = str(e)
+
+    return jsonify({
+        "ok": True,
+        "qdrant_configured": qdrant_configured,
+        "qdrant_reachable": qdrant_reachable,
+        "qdrant_error": qdrant_error,
+    }), 200
 
 
 @app.route("/rebuild-index", methods=["POST"])
@@ -488,10 +487,8 @@ def rebuild():
 if __name__ == "__main__":
     print("HEP Research Library")
     print("=" * 50)
-    print("Loading index...")
+    print("Starting API server...")
     print("Open http://localhost:5000 when ready.")
-    print()
-    get_index()
     print()
     print("Server running at http://localhost:5000")
     port = int(os.environ.get("PORT", "5000"))
