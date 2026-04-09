@@ -3,3 +3,5 @@ gunicorn
 anthropic
 numpy
 pymupdf
+voyageai
+qdrant-client

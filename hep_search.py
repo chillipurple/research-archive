@@ -16,6 +16,9 @@ from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, abort, redirect, Response
 import anthropic
 import fitz  # pymupdf
+import voyageai
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qm
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -31,6 +34,13 @@ OUTPUT_CSV = (RESEARCH_DIR / "_research_index.csv") if RESEARCH_DIR else None
 # Provide HEP_INDEX_URL to download the pre-built pickle at startup (Railway + R2, per handover Section 6).
 INDEX_URL = os.environ.get("HEP_INDEX_URL", "").strip() or None
 INDEX_FILE = Path(os.environ.get("HEP_INDEX_FILE", str(BASE_DIR / "data" / "_vector_index.pkl"))).resolve()
+
+# Semantic search (Qdrant + Voyage)
+VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "").strip()
+VOYAGE_MODEL = os.environ.get("VOYAGE_MODEL", "voyage-3").strip() or "voyage-3"
+QDRANT_URL = os.environ.get("QDRANT_URL", "").strip()
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "").strip()
+QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "hep_research").strip() or "hep_research"
 
 client = anthropic.Anthropic()
 app = Flask(__name__)
@@ -108,6 +118,33 @@ def embed(text: str, vocab: dict) -> np.ndarray:
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b))
+
+_voy = None
+_qdrant = None
+
+
+def get_voyage_client() -> voyageai.Client:
+    global _voy
+    if _voy is None:
+        if not VOYAGE_API_KEY:
+            raise RuntimeError("VOYAGE_API_KEY is not set")
+        _voy = voyageai.Client(api_key=VOYAGE_API_KEY)
+    return _voy
+
+
+def get_qdrant_client() -> QdrantClient:
+    global _qdrant
+    if _qdrant is None:
+        if not QDRANT_URL or not QDRANT_API_KEY:
+            raise RuntimeError("QDRANT_URL and QDRANT_API_KEY must be set")
+        _qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=60)
+    return _qdrant
+
+
+def embed_query(text: str) -> list:
+    voy = get_voyage_client()
+    resp = voy.embed(texts=[text], model=VOYAGE_MODEL)
+    return resp.embeddings[0]
 
 
 # ── Index Building ────────────────────────────────────────────────────────────
@@ -258,6 +295,37 @@ def search(query: str, index: dict, category: str = "All", top_k: int = 8) -> li
     return results[:top_k]
 
 
+def semantic_search(query: str, category: str = "All", top_k: int = 8) -> list:
+    """
+    Returns Qdrant hits as (score, payload_dict).
+    """
+    qdrant = get_qdrant_client()
+    vec = embed_query(query)
+
+    filt = None
+    if category and category != "All":
+        filt = qm.Filter(
+            must=[
+                qm.FieldCondition(
+                    key="category",
+                    match=qm.MatchValue(value=category),
+                )
+            ]
+        )
+
+    hits = qdrant.search(
+        collection_name=QDRANT_COLLECTION,
+        query_vector=vec,
+        limit=top_k,
+        with_payload=True,
+        with_vectors=False,
+        query_filter=filt,
+    )
+    out = []
+    for h in hits:
+        out.append((float(h.score), dict(h.payload or {})))
+    return out
+
 # ── Answer Generation ─────────────────────────────────────────────────────────
 
 def generate_answer(query: str, results: list) -> dict:
@@ -269,26 +337,41 @@ def generate_answer(query: str, results: list) -> dict:
     doc_url_template = os.environ.get("HEP_DOC_URL_TEMPLATE", "").strip()
 
     for i, (score, doc) in enumerate(results, 1):
-        meta    = doc["meta"]
-        title   = meta.get("full_title", doc["filename"])
-        authors = meta.get("authors", "Unknown")
-        year    = meta.get("year", "n.d.")
-        excerpt = " ".join(filter(None, [
-            meta.get("abstract_summary", ""),
-            doc["text"][:1500]
-        ]))
-        context_parts.append(f"[{i}] {title} ({authors}, {year})\n{excerpt}")
+        # `doc` here is a Qdrant payload dict produced by build_embeddings.py
+        title = doc.get("title") or doc.get("filename") or "Unknown title"
+        authors = doc.get("authors") or "Unknown"
+        year = doc.get("year") or "n.d."
+        filename = doc.get("filename") or ""
+        category = doc.get("category") or ""
+        chunk_index = doc.get("chunk_index")
+        page_start = doc.get("page_start")
+        page_end = doc.get("page_end")
+        chunk_text = doc.get("text") or ""
+
+        ref_bits = []
+        if page_start and page_end:
+            ref_bits.append(f"pp. {page_start}-{page_end}")
+        if chunk_index is not None:
+            ref_bits.append(f"chunk {chunk_index}")
+        ref = ("; " + ", ".join(ref_bits)) if ref_bits else ""
+
+        excerpt = chunk_text[:2000]
+        context_parts.append(f"[{i}] {title} ({authors}, {year}){ref}\n{excerpt}")
+
         citation = {
-            "index":           i,
-            "title":           title,
-            "authors":         authors,
-            "year":            year,
-            "filename":        doc["filename"],
-            "category":        meta.get("category", ""),
-            "relevance_score": round(score, 3)
+            "index": i,
+            "title": title,
+            "authors": authors,
+            "year": year,
+            "filename": filename,
+            "category": category,
+            "relevance_score": round(score, 3),
+            "page_start": page_start,
+            "page_end": page_end,
+            "chunk_index": chunk_index,
         }
         if doc_url_template and "{filename}" in doc_url_template:
-            citation["url"] = doc_url_template.replace("{filename}", doc["filename"])
+            citation["url"] = doc_url_template.replace("{filename}", filename)
         citations.append(citation)
 
     context = "\n\n---\n\n".join(context_parts)
@@ -365,9 +448,9 @@ def search_route():
     if not query:
         return jsonify({"error": "No query provided"})
     try:
-        idx     = get_index()
-        results = search(query, idx, category=category)
-        return jsonify(generate_answer(query, results))
+        # Semantic search via Qdrant + Voyage
+        hits = semantic_search(query, category=category, top_k=8)
+        return jsonify(generate_answer(query, hits))
     except Exception as e:
         return jsonify({"error": str(e)})
 

@@ -32,23 +32,18 @@
 
 ### Data model
 
-- **Index file**: `_vector_index.pkl` (pickle)
-  - Stored **outside git**
-  - Hosted in Cloudflare R2 for cloud runtime
+- **Semantic vectors**: stored in **Qdrant** collection `hep_research`
 - **PDF corpus**: Google Drive folder (local-only; required only to rebuild index)
 - **Logo**: hosted in R2 for production; served locally when running on Mac
 
 ### Runtime index handling (cloud-first)
 
-- **Cache path**: `HEP_INDEX_FILE` (default `./data/_vector_index.pkl`)
-- **Download**: if cache is missing, server downloads from `HEP_INDEX_URL`
-- **Self-heal**: if unpickling fails (e.g., wrong file downloaded earlier), server deletes the cached file, re-downloads from `HEP_INDEX_URL`, and retries load.
-- **User-Agent headers**: download request includes a browser-like `User-Agent` to avoid CDN 403s.
+- **Query embedding**: Voyage AI `voyage-3`
+- **Retrieval**: Qdrant top-k chunk search (optionally filtered by category)
 
 ### Local rebuild mode
 
-- Set `HEP_RESEARCH_DIR` to the local Google Drive “Research” folder to enable rebuilding.
-- `/rebuild-index` is effectively disabled in cloud mode (returns an error unless `HEP_RESEARCH_DIR` is set).
+- Run `build_embeddings.py` with access to Google Drive PDFs + `_research_index.csv` to (re)embed and upsert chunks to Qdrant.
 
 ### HTTP endpoints
 
@@ -63,9 +58,6 @@
   - Request JSON: `{ "query": string, "category": string }`
   - Response JSON: `{ "answer": string, "citations": [...] }`
   - Error JSON: `{ "error": string }`
-- **`POST /rebuild-index`**
-  - Rebuilds index **only** if `HEP_RESEARCH_DIR` is configured (local mode)
-  - Otherwise returns `{ "error": ... }`
 - **`GET /health`**
   - **200**: `{ ok: true, index_loaded: true, documents_indexed: number }`
   - **503**: `{ ok: false, index_loaded: false, error: string }`
@@ -83,13 +75,16 @@
 
 **Required (production)**
 - **`ANTHROPIC_API_KEY`**: Anthropic API key
-- **`HEP_INDEX_URL`**: public HTTPS URL to the R2 object containing `_vector_index.pkl`
+- **`VOYAGE_API_KEY`**: Voyage AI API key
+- **`QDRANT_URL`**: Qdrant URL (e.g. `http://204.168.162.233:6333`)
+- **`QDRANT_API_KEY`**: Qdrant API key
 
 **Recommended (production)**
 - **`HEP_LOGO_URL`**: public HTTPS URL to the R2 logo PNG
 
 **Optional**
-- **`HEP_INDEX_FILE`**: local path to store downloaded index (default `./data/_vector_index.pkl`)
+- **`QDRANT_COLLECTION`**: defaults to `hep_research`
+- **`VOYAGE_MODEL`**: defaults to `voyage-3`
 - **`HEP_LOGO_PATH`**: local path to logo (used only if `HEP_LOGO_URL` not set)
 - **`HEP_RESEARCH_DIR`**: local Google Drive research folder path (enables `/rebuild-index`)
 - **`PORT`**: injected by Railway; also supported by `__main__` for local parity
