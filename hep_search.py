@@ -39,7 +39,24 @@ INDEX_FILE = Path(os.environ.get("HEP_INDEX_FILE", str(BASE_DIR / "data" / "_vec
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "").strip()
 VOYAGE_MODEL = os.environ.get("VOYAGE_MODEL", "voyage-3").strip() or "voyage-3"
 QDRANT_URL = os.environ.get("QDRANT_URL", "").strip()
-QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "").strip()
+
+
+def _read_qdrant_api_key() -> str:
+    """
+    Read Qdrant API key from env, supporting common legacy aliases.
+    """
+    key = (
+        os.environ.get("QDRANT_API_KEY")
+        or os.environ.get("HEP_QDRANT_API_KEY")
+        or os.environ.get("QDRANT_KEY")
+        or ""
+    ).strip()
+    if key.lower().startswith("bearer "):
+        key = key[7:].strip()
+    return key
+
+
+QDRANT_API_KEY = _read_qdrant_api_key()
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "hep_research").strip() or "hep_research"
 
 client = anthropic.Anthropic()
@@ -136,7 +153,7 @@ def get_qdrant_client() -> QdrantClient:
     global _qdrant
     if _qdrant is None:
         if not QDRANT_URL or not QDRANT_API_KEY:
-            raise RuntimeError("QDRANT_URL and QDRANT_API_KEY must be set")
+            raise RuntimeError("QDRANT_URL and QDRANT_API_KEY (or HEP_QDRANT_API_KEY) must be set")
         _qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=60)
     return _qdrant
 
@@ -410,10 +427,7 @@ Answer:"""
 _index = None
 
 def get_index():
-    global _index
-    if _index is None:
-        _index = build_index()
-    return _index
+    raise RuntimeError("Legacy TF-IDF index is disabled; semantic search uses Qdrant only.")
 
 
 @app.route("/")
@@ -473,13 +487,7 @@ def health():
 
 @app.route("/rebuild-index", methods=["POST"])
 def rebuild():
-    global _index
-    if RESEARCH_DIR is None or OUTPUT_CSV is None:
-        return jsonify({"error": "Rebuild requires local HEP_RESEARCH_DIR (Google Drive). Not available in cloud mode."})
-    if INDEX_FILE.exists():
-        INDEX_FILE.unlink()
-    _index = build_index()
-    return jsonify({"status": "ok", "documents": len(_index["documents"])})
+    return jsonify({"error": "Legacy TF-IDF rebuild is disabled. Use build_embeddings.py + Qdrant."}), 410
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
