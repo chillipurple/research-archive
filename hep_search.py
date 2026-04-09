@@ -465,23 +465,11 @@ def search_route():
 
 @app.route("/health")
 def health():
-    qdrant_configured = bool(QDRANT_URL and QDRANT_API_KEY)
-    qdrant_reachable = False
-    qdrant_error = None
-
-    # Health must not depend on local files or legacy pickle index.
-    if qdrant_configured:
-        try:
-            get_qdrant_client().get_collections()
-            qdrant_reachable = True
-        except Exception as e:
-            qdrant_error = str(e)
-
+    # Keep health checks fast and non-blocking: no network calls here.
     return jsonify({
         "ok": True,
-        "qdrant_configured": qdrant_configured,
-        "qdrant_reachable": qdrant_reachable,
-        "qdrant_error": qdrant_error,
+        "qdrant_configured": bool(QDRANT_URL and QDRANT_API_KEY),
+        "qdrant_lazy_connect": True,
     }), 200
 
 
