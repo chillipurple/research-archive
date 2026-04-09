@@ -330,14 +330,15 @@ def semantic_search(query: str, category: str = "All", top_k: int = 8) -> list:
             ]
         )
 
-    hits = qdrant.search(
+    response = qdrant.query_points(
         collection_name=QDRANT_COLLECTION,
-        query_vector=vec,
+        query=vec,
         limit=top_k,
         with_payload=True,
         with_vectors=False,
         query_filter=filt,
     )
+    hits = response.points
     out = []
     for h in hits:
         out.append((float(h.score), dict(h.payload or {})))
