@@ -412,19 +412,7 @@ async function doSearch() {
       document.getElementById('answerText').innerHTML = formatted;
 
       const citationList = document.getElementById('citationList');
-      // Debug: raw HTML anchor — if this is clickable but dynamic links are not, the bug is in JS construction.
-      const testPdfBase = 'https://pub-40a226eaa06b4f59988b1d1213d57d9c.r2.dev/pdfs/';
-      citationList.innerHTML =
-        '<div class="citation-item" id="cite-hardcoded-link-test">' +
-        '<div class="citation-num">T</div>' +
-        '<div>' +
-        '<div class="citation-title">Hardcoded link test</div>' +
-        '<div class="citation-actions">' +
-        '<a class="citation-pdf-link" href="' + testPdfBase + '" target="_blank" rel="noopener noreferrer">Test PDF (raw HTML)</a>' +
-        '</div>' +
-        '<div class="citation-meta"><span>—</span></div>' +
-        '</div>' +
-        '</div>';
+      citationList.innerHTML = '';
 
       data.citations.forEach(c => {
         const item = document.createElement('div');
