@@ -194,7 +194,13 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 .answer-text sup a.cite-link { color: var(--gold); text-decoration: none; }
 .answer-text sup a.cite-link:hover { text-decoration: underline; }
 
-.citations { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
+.citations {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  position: relative;
+  z-index: 1;
+}
 
 .citations-heading {
   font-family: 'Oswald', sans-serif;
@@ -211,6 +217,12 @@ select:focus { outline: none; border-color: var(--mid-purple); }
   gap: 14px;
   padding: 12px 0;
   border-bottom: 1px solid rgba(139,56,141,0.12);
+}
+
+/* Prevent flex items from clipping / swallowing pointer events on long titles */
+.citation-item > div:not(.citation-num) {
+  flex: 1;
+  min-width: 0;
 }
 
 .citation-item:last-child { border-bottom: none; }
@@ -237,6 +249,19 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 }
 .citation-pdf-link:hover { text-decoration: underline; }
 .citation-pdf-wrap { font-weight: 400; }
+
+/* Block row for PDF action so links are not overlapped by sibling layout/stacking quirks */
+.citation-actions {
+  margin-top: 6px;
+  position: relative;
+  z-index: 2;
+}
+.citation-actions a {
+  pointer-events: auto;
+  cursor: pointer;
+  position: relative;
+  z-index: 2;
+}
 
 .citation-meta {
   font-size: 0.78rem;
@@ -387,7 +412,20 @@ async function doSearch() {
       document.getElementById('answerText').innerHTML = formatted;
 
       const citationList = document.getElementById('citationList');
-      citationList.innerHTML = '';
+      // Debug: raw HTML anchor — if this is clickable but dynamic links are not, the bug is in JS construction.
+      const testPdfBase = 'https://pub-40a226eaa06b4f59988b1d1213d57d9c.r2.dev/pdfs/';
+      citationList.innerHTML =
+        '<div class="citation-item" id="cite-hardcoded-link-test">' +
+        '<div class="citation-num">T</div>' +
+        '<div>' +
+        '<div class="citation-title">Hardcoded link test</div>' +
+        '<div class="citation-actions">' +
+        '<a class="citation-pdf-link" href="' + testPdfBase + '" target="_blank" rel="noopener noreferrer">Test PDF (raw HTML)</a>' +
+        '</div>' +
+        '<div class="citation-meta"><span>—</span></div>' +
+        '</div>' +
+        '</div>';
+
       data.citations.forEach(c => {
         const item = document.createElement('div');
         item.className = 'citation-item';
@@ -404,7 +442,7 @@ async function doSearch() {
 
         if (c.url) {
           const titleLink = document.createElement('a');
-          titleLink.href = c.url;
+          titleLink.href = String(c.url).trim();
           titleLink.target = '_blank';
           titleLink.rel = 'noopener noreferrer';
           titleLink.textContent = c.title != null ? String(c.title) : '';
@@ -413,18 +451,20 @@ async function doSearch() {
           titleRow.appendChild(document.createTextNode(c.title != null ? String(c.title) : ''));
         }
 
-        if (c.pdf_url) {
-          const sep = document.createElement('span');
-          sep.className = 'citation-pdf-wrap';
-          sep.appendChild(document.createTextNode(' · '));
+        body.appendChild(titleRow);
+
+        const pdfUrl = c.pdf_url != null ? String(c.pdf_url).trim() : '';
+        if (pdfUrl) {
+          const actions = document.createElement('div');
+          actions.className = 'citation-actions';
           const pdfLink = document.createElement('a');
           pdfLink.className = 'citation-pdf-link';
-          pdfLink.href = c.pdf_url;
+          pdfLink.href = pdfUrl;
           pdfLink.target = '_blank';
           pdfLink.rel = 'noopener noreferrer';
           pdfLink.textContent = 'View PDF';
-          sep.appendChild(pdfLink);
-          titleRow.appendChild(sep);
+          actions.appendChild(pdfLink);
+          body.appendChild(actions);
         }
 
         const meta = document.createElement('div');
@@ -440,13 +480,13 @@ async function doSearch() {
         spCat.textContent = c.category != null ? String(c.category) : '';
         meta.append(spAuthors, spDot, spYear, spCat);
 
-        body.append(titleRow, meta);
+        body.appendChild(meta);
         item.append(num, body);
         citationList.appendChild(item);
       });
 
       document.getElementById('stats').textContent =
-        `${data.citations.length} sources reviewed`;
+        String(data.citations.length) + ' sources reviewed';
       resultBox.style.display = 'block';
       resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
