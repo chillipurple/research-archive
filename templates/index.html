@@ -228,6 +228,16 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 .citation-title a { color: var(--off-white); text-decoration: none; }
 .citation-title a:hover { text-decoration: underline; }
 
+.citation-pdf-link {
+  color: var(--gold);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.citation-pdf-link:hover { text-decoration: underline; }
+.citation-pdf-wrap { font-weight: 400; }
+
 .citation-meta {
   font-size: 0.78rem;
   color: var(--text-muted);
@@ -377,19 +387,30 @@ async function doSearch() {
       document.getElementById('answerText').innerHTML = formatted;
 
       document.getElementById('citationList').innerHTML =
-        data.citations.map(c => `
+        data.citations.map(c => {
+          const titleEsc = escapeHtml(c.title);
+          const urlEsc = c.url ? escapeHtml(c.url) : '';
+          const pdfEsc = c.pdf_url ? escapeHtml(c.pdf_url) : '';
+          const titleHtml = c.url
+            ? `<a href="${urlEsc}" target="_blank" rel="noopener noreferrer">${titleEsc}</a>`
+            : titleEsc;
+          const viewPdf = c.pdf_url
+            ? ` <span class="citation-pdf-wrap">· <a class="citation-pdf-link" href="${pdfEsc}" target="_blank" rel="noopener noreferrer">View PDF</a></span>`
+            : '';
+          return `
           <div class="citation-item" id="cite-${c.index}">
             <div class="citation-num">[${c.index}]</div>
             <div>
-              <div class="citation-title">${c.url ? `<a href="${c.url}" target="_blank" rel="noopener noreferrer">${c.title}</a>` : c.title}</div>
+              <div class="citation-title">${titleHtml}${viewPdf}</div>
               <div class="citation-meta">
-                <span>${c.authors}</span>
+                <span>${escapeHtml(c.authors)}</span>
                 <span>&middot;</span>
-                <span>${c.year}</span>
-                <span class="citation-category">${c.category}</span>
+                <span>${escapeHtml(String(c.year))}</span>
+                <span class="citation-category">${escapeHtml(c.category)}</span>
               </div>
             </div>
-          </div>`).join('');
+          </div>`;
+        }).join('');
 
       document.getElementById('stats').textContent =
         `${data.citations.length} sources reviewed`;

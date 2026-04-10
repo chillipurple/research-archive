@@ -11,6 +11,7 @@ import os
 import pickle
 import urllib.request
 import urllib.error
+from urllib.parse import quote
 import numpy as np
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, abort, redirect, Response
@@ -58,6 +59,12 @@ def _read_qdrant_api_key() -> str:
 
 QDRANT_API_KEY = _read_qdrant_api_key()
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "hep_research").strip() or "hep_research"
+
+# Public PDFs on Cloudflare R2: {HEP_PDF_BASE_URL}/{filename}
+HEP_PDF_BASE_URL = os.environ.get(
+    "HEP_PDF_BASE_URL",
+    "https://pub-40a226eaa06b4f59988b1d1213d57d9c.r2.dev/pdfs",
+).strip().rstrip("/")
 
 client = anthropic.Anthropic()
 app = Flask(__name__)
@@ -162,6 +169,13 @@ def embed_query(text: str) -> list:
     voy = get_voyage_client()
     resp = voy.embed(texts=[text], model=VOYAGE_MODEL)
     return resp.embeddings[0]
+
+
+def pdf_url_for_filename(filename: str) -> str:
+    """HTTPS URL to the PDF on R2: base URL + path-safe filename."""
+    if not filename:
+        return ""
+    return f"{HEP_PDF_BASE_URL}/{quote(filename, safe='')}"
 
 
 # ── Index Building ────────────────────────────────────────────────────────────
@@ -387,6 +401,7 @@ def generate_answer(query: str, results: list) -> dict:
             "page_start": page_start,
             "page_end": page_end,
             "chunk_index": chunk_index,
+            "pdf_url": pdf_url_for_filename(filename),
         }
         if doc_url_template and "{filename}" in doc_url_template:
             citation["url"] = doc_url_template.replace("{filename}", filename)
