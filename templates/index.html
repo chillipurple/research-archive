@@ -386,32 +386,64 @@ async function doSearch() {
       const formatted = formatAnswerToHtml(data.answer);
       document.getElementById('answerText').innerHTML = formatted;
 
-      document.getElementById('citationList').innerHTML =
-        data.citations.map(c => {
-          console.log('[HEP] citation', c);
-          const titleEsc = escapeHtml(c.title);
-          const urlEsc = c.url ? escapeHtml(c.url) : '';
-          const pdfEsc = c.pdf_url ? escapeHtml(c.pdf_url) : '';
-          const titleHtml = c.url
-            ? `<a href="${urlEsc}" target="_blank" rel="noopener noreferrer">${titleEsc}</a>`
-            : titleEsc;
-          const viewPdf = c.pdf_url
-            ? ` <span class="citation-pdf-wrap">· <a class="citation-pdf-link" href="${pdfEsc}" target="_blank" rel="noopener noreferrer">View PDF</a></span>`
-            : '';
-          return `
-          <div class="citation-item" id="cite-${c.index}">
-            <div class="citation-num">[${c.index}]</div>
-            <div>
-              <div class="citation-title">${titleHtml}${viewPdf}</div>
-              <div class="citation-meta">
-                <span>${escapeHtml(c.authors)}</span>
-                <span>&middot;</span>
-                <span>${escapeHtml(String(c.year))}</span>
-                <span class="citation-category">${escapeHtml(c.category)}</span>
-              </div>
-            </div>
-          </div>`;
-        }).join('');
+      const citationList = document.getElementById('citationList');
+      citationList.innerHTML = '';
+      data.citations.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'citation-item';
+        item.id = 'cite-' + String(c.index);
+
+        const num = document.createElement('div');
+        num.className = 'citation-num';
+        num.textContent = '[' + String(c.index) + ']';
+
+        const body = document.createElement('div');
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'citation-title';
+
+        if (c.url) {
+          const titleLink = document.createElement('a');
+          titleLink.href = c.url;
+          titleLink.target = '_blank';
+          titleLink.rel = 'noopener noreferrer';
+          titleLink.textContent = c.title != null ? String(c.title) : '';
+          titleRow.appendChild(titleLink);
+        } else {
+          titleRow.appendChild(document.createTextNode(c.title != null ? String(c.title) : ''));
+        }
+
+        if (c.pdf_url) {
+          const sep = document.createElement('span');
+          sep.className = 'citation-pdf-wrap';
+          sep.appendChild(document.createTextNode(' · '));
+          const pdfLink = document.createElement('a');
+          pdfLink.className = 'citation-pdf-link';
+          pdfLink.href = c.pdf_url;
+          pdfLink.target = '_blank';
+          pdfLink.rel = 'noopener noreferrer';
+          pdfLink.textContent = 'View PDF';
+          sep.appendChild(pdfLink);
+          titleRow.appendChild(sep);
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'citation-meta';
+        const spAuthors = document.createElement('span');
+        spAuthors.textContent = c.authors != null ? String(c.authors) : '';
+        const spDot = document.createElement('span');
+        spDot.textContent = '\u00b7';
+        const spYear = document.createElement('span');
+        spYear.textContent = c.year != null ? String(c.year) : '';
+        const spCat = document.createElement('span');
+        spCat.className = 'citation-category';
+        spCat.textContent = c.category != null ? String(c.category) : '';
+        meta.append(spAuthors, spDot, spYear, spCat);
+
+        body.append(titleRow, meta);
+        item.append(num, body);
+        citationList.appendChild(item);
+      });
 
       document.getElementById('stats').textContent =
         `${data.citations.length} sources reviewed`;
