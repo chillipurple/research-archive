@@ -388,6 +388,7 @@ async function doSearch() {
 
       document.getElementById('citationList').innerHTML =
         data.citations.map(c => {
+          console.log('[HEP] citation', c);
           const titleEsc = escapeHtml(c.title);
           const urlEsc = c.url ? escapeHtml(c.url) : '';
           const pdfEsc = c.pdf_url ? escapeHtml(c.pdf_url) : '';
