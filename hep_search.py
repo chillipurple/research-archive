@@ -9,12 +9,15 @@ import re
 import csv
 import os
 import pickle
+import tempfile
 import urllib.request
 import urllib.error
 from urllib.parse import quote
 import numpy as np
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, abort, redirect, Response
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.utils import secure_filename
 import anthropic
 import fitz  # pymupdf
 import voyageai
@@ -69,6 +72,17 @@ HEP_PDF_BASE_URL = os.environ.get(
 client = anthropic.Anthropic()
 app = Flask(__name__)
 
+_max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", "100"))
+app.config["MAX_CONTENT_LENGTH"] = _max_upload_mb * 1024 * 1024
+
+try:
+    from pdf_ingest import ingest_pdf, upload_config_ok
+except ImportError:  # pragma: no cover
+    ingest_pdf = None  # type: ignore
+
+    def upload_config_ok() -> bool:  # type: ignore
+        return False
+
 # ── HTTP Basic Auth (optional: set AUTH_USERNAME + AUTH_PASSWORD in production) ─
 
 AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "").strip()
@@ -82,6 +96,11 @@ def _unauthorized() -> Response:
         401,
         {"WWW-Authenticate": 'Basic realm="HEP Research Library"'},
     )
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def _payload_too_large(_e):
+    return jsonify({"ok": False, "error": "File too large", "steps": []}), 413
 
 
 @app.before_request
@@ -491,6 +510,71 @@ def health():
 @app.route("/rebuild-index", methods=["POST"])
 def rebuild():
     return jsonify({"error": "Legacy TF-IDF rebuild is disabled. Use build_embeddings.py + Qdrant."}), 410
+
+
+@app.route("/admin")
+def admin_page():
+    logo_url = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
+    return render_template(
+        "admin.html",
+        logo_url=logo_url,
+        upload_ready=bool(ingest_pdf is not None and upload_config_ok()),
+        max_mb=_max_upload_mb,
+    )
+
+
+@app.route("/admin/api/status")
+def admin_status():
+    try:
+        qc = get_qdrant_client()
+        cnt = qc.count(collection_name=QDRANT_COLLECTION, exact=True).count
+        return jsonify({"ok": True, "total_chunks": cnt})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "total_chunks": None}), 200
+
+
+@app.route("/admin/api/upload", methods=["POST"])
+def admin_upload():
+    if ingest_pdf is None:
+        return jsonify({"ok": False, "error": "pdf_ingest module not available", "steps": []}), 500
+    if not upload_config_ok():
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "Missing R2 or Google Drive environment variables",
+                    "steps": [],
+                }
+            ),
+            400,
+        )
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "No file provided", "steps": []}), 400
+    filename = secure_filename(f.filename)
+    if not filename.lower().endswith(".pdf"):
+        return jsonify({"ok": False, "error": "Only PDF files are allowed", "steps": []}), 400
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    tmp_path = Path(tmp.name)
+    try:
+        tmp.close()
+        f.save(tmp_path)
+        result = ingest_pdf(tmp_path, filename)
+        code = 200 if result.get("ok") else 500
+        return jsonify(
+            {
+                "ok": bool(result.get("ok")),
+                "steps": result.get("steps", []),
+                "error": result.get("error"),
+                "chunks_upserted": result.get("chunks_upserted", 0),
+            }
+        ), code
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────

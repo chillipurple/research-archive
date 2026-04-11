@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — HEP Research Library</title>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;600&family=Source+Sans+Pro:ital,wght@0,300;0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --deep-purple:   #280F2E;
+  --mid-purple:    #8B388D;
+  --light-purple:  #E1CBE0;
+  --off-white:     #FAFAF7;
+  --gold:          #FFC05C;
+  --border:        rgba(139,56,141,0.25);
+  --text-muted:    #9a85a0;
+}
+body { font-family: 'Source Sans Pro', sans-serif; background: var(--deep-purple); color: var(--off-white); min-height: 100vh; }
+
+header {
+  background: #1c0a22;
+  border-bottom: 3px solid var(--mid-purple);
+  padding: 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 80px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.header-logo { height: 56px; width: auto; }
+.header-nav a {
+  color: var(--gold);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+.header-nav a:hover { text-decoration: underline; }
+
+.container { max-width: 860px; margin: 0 auto; padding: 48px 20px; }
+
+.accent-bar {
+  height: 3px;
+  background: linear-gradient(90deg, var(--mid-purple), var(--gold));
+  border-radius: 2px;
+  margin-bottom: 36px;
+  opacity: 0.6;
+}
+
+.panel {
+  background: #1c0a22;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px;
+  margin-bottom: 28px;
+}
+
+.panel-label {
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 14px;
+}
+
+.status-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 1.05rem;
+}
+.status-value { font-weight: 600; color: var(--light-purple); }
+.status-error { color: #f4a0a0; font-size: 0.9rem; }
+
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  padding: 48px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  background: rgba(0,0,0,0.2);
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--mid-purple);
+  background: rgba(139,56,141,0.12);
+}
+.drop-zone .hint { color: var(--text-muted); font-size: 0.9rem; margin-top: 10px; }
+.drop-zone .icon { font-size: 2rem; margin-bottom: 8px; opacity: 0.85; }
+
+input[type="file"] { display: none; }
+
+button.btn {
+  background: var(--mid-purple);
+  border: none;
+  border-radius: 6px;
+  color: var(--off-white);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 10px 28px;
+  cursor: pointer;
+  margin-top: 16px;
+  transition: background 0.2s;
+}
+button.btn:hover:not(:disabled) { background: #9d42a0; }
+button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not-allowed; }
+
+.progress-wrap {
+  margin-top: 20px;
+  display: none;
+}
+.progress-wrap.visible { display: block; }
+.progress-bar {
+  height: 8px;
+  background: rgba(0,0,0,0.35);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--mid-purple), var(--gold));
+  transition: width 0.15s ease-out;
+}
+.progress-label { font-size: 0.82rem; color: var(--text-muted); margin-top: 8px; }
+
+.messages {
+  margin-top: 20px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.messages .msg { padding: 8px 0; border-bottom: 1px solid rgba(139,56,141,0.12); }
+.messages .msg:last-child { border-bottom: none; }
+.messages .ok { color: var(--light-purple); }
+.messages .fail { color: #f4a0a0; }
+.messages .step-name { color: var(--gold); font-weight: 600; }
+.config-warn {
+  background: rgba(200,50,50,0.15);
+  border: 1px solid rgba(200,50,50,0.35);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 0.9rem;
+  color: #f4c0c0;
+  margin-bottom: 20px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <img src="{{ logo_url }}" alt="Hope Education Project" class="header-logo">
+  <nav class="header-nav"><a href="/">← Back to search</a></nav>
+</header>
+
+<div class="container">
+  <div class="accent-bar"></div>
+
+  <div class="panel">
+    <div class="panel-label">Corpus status</div>
+    <div class="status-row">
+      <span>Total chunks in Qdrant:</span>
+      <span class="status-value" id="chunkCount">—</span>
+    </div>
+    <p class="status-error" id="statusError" style="display:none;margin-top:10px;"></p>
+  </div>
+
+  {% if not upload_ready %}
+  <div class="config-warn">
+    Upload is disabled: set <code>R2_ACCESS_KEY_ID</code>, <code>R2_SECRET_ACCESS_KEY</code>,
+    <code>R2_BUCKET_NAME</code>, <code>R2_ENDPOINT_URL</code>,
+    <code>GOOGLE_SERVICE_ACCOUNT_JSON</code>, and <code>GOOGLE_DRIVE_FOLDER_ID</code> in the environment.
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    <div class="panel-label">Upload PDF</div>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:16px;">
+      Drag and drop a PDF here, or click to choose. The file is sent to R2 (<code>pdfs/</code>), Google Drive, then embedded into Qdrant.
+    </p>
+    <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Upload PDF">
+      <div class="icon">📄</div>
+      <div>Drop PDF here or click to browse</div>
+      <div class="hint">Only .pdf files (max {{ max_mb }} MB)</div>
+    </div>
+    <input type="file" id="fileInput" accept="application/pdf,.pdf">
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-label" id="progressLabel">Uploading…</div>
+    </div>
+
+    <div class="messages" id="messages"></div>
+    <button type="button" class="btn" id="uploadBtn" disabled>Upload</button>
+  </div>
+</div>
+
+<script>
+(function() {
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const progressWrap = document.getElementById('progressWrap');
+  const progressFill = document.getElementById('progressFill');
+  const progressLabel = document.getElementById('progressLabel');
+  const messages = document.getElementById('messages');
+  const chunkCount = document.getElementById('chunkCount');
+  const statusError = document.getElementById('statusError');
+  const uploadReady = {{ upload_ready | tojson }};
+  const maxMb = {{ max_mb }};
+
+  let selectedFile = null;
+
+  function loadStatus() {
+    fetch('/admin/api/status')
+      .then(r => r.json())
+      .then(data => {
+        statusError.style.display = 'none';
+        if (data.ok && typeof data.total_chunks === 'number') {
+          chunkCount.textContent = data.total_chunks.toLocaleString();
+        } else {
+          chunkCount.textContent = '—';
+          statusError.textContent = data.error || 'Could not load corpus status.';
+          statusError.style.display = 'block';
+        }
+      })
+      .catch(() => {
+        chunkCount.textContent = '—';
+        statusError.textContent = 'Failed to fetch corpus status.';
+        statusError.style.display = 'block';
+      });
+  }
+
+  loadStatus();
+
+  function setMessages(html) {
+    messages.innerHTML = html;
+  }
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+
+  ['dragenter','dragover','dragleave','drop'].forEach(ev => {
+    dropZone.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); });
+  });
+  dropZone.addEventListener('dragenter', () => dropZone.classList.add('dragover'));
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    dropZone.classList.remove('dragover');
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f && /\.pdf$/i.test(f.name)) setFile(f);
+  });
+
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (f) setFile(f);
+  });
+
+  function setFile(f) {
+    selectedFile = f;
+    uploadBtn.disabled = !uploadReady || !f;
+    setMessages('<div class="msg ok">Selected: <strong>' + escapeHtml(f.name) + '</strong> (' + formatSize(f.size) + ')</div>');
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function formatSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  uploadBtn.addEventListener('click', () => {
+    if (!selectedFile || !uploadReady) return;
+    const fd = new FormData();
+    fd.append('file', selectedFile, selectedFile.name);
+
+    progressWrap.classList.add('visible');
+    progressFill.style.width = '0%';
+    progressLabel.textContent = 'Uploading…';
+    setMessages('<div class="msg ok">Uploading to server…</div>');
+    uploadBtn.disabled = true;
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/admin/api/upload');
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        progressFill.style.width = pct + '%';
+        progressLabel.textContent = 'Uploading… ' + pct + '%';
+      }
+    };
+    xhr.onload = () => {
+      progressFill.style.width = '100%';
+      progressWrap.classList.remove('visible');
+      uploadBtn.disabled = false;
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (data.ok) {
+          let html = '';
+          (data.steps || []).forEach(s => {
+            const cls = s.ok ? 'ok' : 'fail';
+            html += '<div class="msg ' + cls + '"><span class="step-name">' + escapeHtml(s.name) + '</span>: ' + escapeHtml(s.detail || '') + '</div>';
+          });
+          html += '<div class="msg ok"><strong>Done.</strong> ' + (data.chunks_upserted || 0) + ' chunks upserted to Qdrant.</div>';
+          setMessages(html);
+          loadStatus();
+        } else {
+          let html = '';
+          (data.steps || []).forEach(s => {
+            const cls = s.ok ? 'ok' : 'fail';
+            html += '<div class="msg ' + cls + '"><span class="step-name">' + escapeHtml(s.name) + '</span>: ' + escapeHtml(s.detail || '') + '</div>';
+          });
+          html += '<div class="msg fail"><strong>Failed.</strong> ' + escapeHtml(data.error || '') + '</div>';
+          setMessages(html);
+        }
+      } catch (err) {
+        setMessages('<div class="msg fail">Invalid response: ' + escapeHtml(xhr.responseText.slice(0, 500)) + '</div>');
+      }
+    };
+    xhr.onerror = () => {
+      progressWrap.classList.remove('visible');
+      uploadBtn.disabled = false;
+      setMessages('<div class="msg fail">Network error during upload.</div>');
+    };
+    xhr.send(fd);
+  });
+})();
+</script>
+</body>
+</html>
