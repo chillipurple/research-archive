@@ -549,6 +549,31 @@ def admin_status():
         return jsonify({"ok": False, "error": str(e), "total_chunks": None}), 200
 
 
+_ADMIN_DEBUG_ENV_KEYS = (
+    "QDRANT_URL",
+    "QDRANT_API_KEY",
+    "HEP_QDRANT_API_KEY",
+    "VOYAGE_API_KEY",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET_NAME",
+    "R2_ENDPOINT_URL",
+    "GOOGLE_SERVICE_ACCOUNT_JSON",
+    "GOOGLE_DRIVE_FOLDER_ID",
+)
+
+
+@app.route("/admin/api/debug")
+def admin_debug():
+    """
+    Returns True/False per key: whether a non-empty value exists after the same cleaning
+    used for secrets (strip, BOM, surrounding quotes). No secret values are returned.
+    """
+    return jsonify(
+        {k: bool(_clean_env_str(os.environ.get(k))) for k in _ADMIN_DEBUG_ENV_KEYS}
+    )
+
+
 @app.route("/admin/api/upload", methods=["POST"])
 def admin_upload():
     if ingest_pdf is None:
