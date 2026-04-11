@@ -9,11 +9,16 @@ import base64
 import json
 import logging
 import os
+import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
+
+_google_sa_url_body: str | None = None
+_google_sa_url_error: BaseException | None = None
+_google_sa_url_fetch_lock = threading.Lock()
 
 import boto3
 import voyageai
@@ -60,20 +65,88 @@ def _env_first(*keys: str) -> str:
     return ""
 
 
-def _parse_google_service_account_dict(raw: str) -> dict:
-    """Parse JSON from env; supports base64-encoded JSON (some deployment platforms)."""
+def _fetch_google_service_account_from_url(url: str) -> str:
+    """
+    Fetch service account JSON from GOOGLE_SERVICE_ACCOUNT_URL (cached per process).
+    Called when resolving credentials; not at import time so missing URL does not block import.
+    """
+    global _google_sa_url_body, _google_sa_url_error
+    with _google_sa_url_fetch_lock:
+        if _google_sa_url_error is not None:
+            raise _google_sa_url_error
+        if _google_sa_url_body is not None:
+            return _google_sa_url_body
+        import requests
+
+        try:
+            r = requests.get(
+                url,
+                timeout=60,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; HEPResearchLibrary/1.0; +https://hopeeducationproject.org)",
+                    "Accept": "application/json, */*",
+                },
+            )
+            r.raise_for_status()
+            _google_sa_url_body = r.text
+            return _google_sa_url_body
+        except Exception as e:
+            _google_sa_url_error = e
+            raise
+
+
+def _resolve_google_service_account_raw_and_source() -> Tuple[str, str]:
+    """
+    Prefer GOOGLE_SERVICE_ACCOUNT_URL (fetch via HTTP), else inline GOOGLE_SERVICE_ACCOUNT_JSON.
+    Returns (raw_body, source_label) where source_label is \"url\" or \"env\".
+    """
+    url = _clean_env_value(os.environ.get("GOOGLE_SERVICE_ACCOUNT_URL"))
+    if url:
+        return _fetch_google_service_account_from_url(url), "url"
+    raw = _env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    return raw, "env"
+
+
+def _parse_google_service_account_json_with_method(raw: str) -> tuple[dict, str]:
+    """
+    Parse Google service account credentials from env.
+
+    Order (after raw is loaded from URL or env):
+    1) Base64-decode (whitespace stripped), UTF-8, then JSON parse → method \"base64\"
+    2) Plain JSON parse of the raw string (may contain newlines) → method \"json\"
+    """
     raw = _clean_env_value(raw)
     if not raw:
         raise ValueError("empty Google service account JSON")
+
+    compact_b64 = "".join(raw.split())
+
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
+        decoded = base64.b64decode(compact_b64, validate=False)
+        text = decoded.decode("utf-8")
+        return json.loads(text), "base64"
+    except Exception:
         pass
+
     try:
-        decoded = base64.b64decode(raw).decode("utf-8")
-        return json.loads(decoded)
-    except Exception as e:
+        return json.loads(raw), "json"
+    except json.JSONDecodeError as e:
         raise ValueError(f"invalid GOOGLE_SERVICE_ACCOUNT_JSON: {e}") from e
+
+
+def _parse_google_service_account_dict(raw: str | None = None) -> dict:
+    """
+    Load credentials: GOOGLE_SERVICE_ACCOUNT_URL (fetch) first, else GOOGLE_SERVICE_ACCOUNT_JSON.
+    Then parse body: base64 first, then plain JSON (see _parse_google_service_account_json_with_method).
+    """
+    if raw is None:
+        raw, _src = _resolve_google_service_account_raw_and_source()
+    if not raw:
+        raise ValueError(
+            "no Google service account: set GOOGLE_SERVICE_ACCOUNT_URL or GOOGLE_SERVICE_ACCOUNT_JSON"
+        )
+    d, _method = _parse_google_service_account_json_with_method(raw)
+    return d
 
 
 def _qdrant_api_key() -> str:
@@ -130,10 +203,7 @@ def upload_r2(local_path: Path, filename: str) -> str:
 
 
 def upload_google_drive(local_path: Path, filename: str) -> str:
-    raw = _env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON")
-    if not raw:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is not set")
-    info = _parse_google_service_account_dict(raw)
+    info = _parse_google_service_account_dict()
     folder_id = _env_first("GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID", "GOOGLE_DRIVE_PARENT_ID")
     if not folder_id:
         raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID is not set")
@@ -340,20 +410,36 @@ def upload_config_detail() -> Dict[str, Any]:
         add("r2_bucket", "R2 bucket name", ok, "resolved" if ok else "missing (R2_BUCKET_NAME or aliases)")
         overall = overall and ok
 
-        graw = _env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON")
-        ok = bool(graw)
-        add("google_json_present", "Google service account JSON (non-empty)", ok, "present" if ok else "missing")
-        overall = overall and ok
+        has_gurl = bool(_clean_env_value(os.environ.get("GOOGLE_SERVICE_ACCOUNT_URL")))
+        has_gjson = bool(_env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON"))
+        g_present = has_gurl or has_gjson
+        add(
+            "google_credentials_present",
+            "Google credentials (GOOGLE_SERVICE_ACCOUNT_URL or inline JSON)",
+            g_present,
+            f"has_url={has_gurl}, has_env_json={has_gjson}" if g_present else "set GOOGLE_SERVICE_ACCOUNT_URL or GOOGLE_SERVICE_ACCOUNT_JSON",
+        )
+        overall = overall and g_present
 
-        if graw:
+        if g_present:
             try:
-                _parse_google_service_account_dict(graw)
-                add("google_json_parse", "Google service account JSON parses", True, "valid JSON (or base64 JSON)")
+                raw, src = _resolve_google_service_account_raw_and_source()
+                if not raw:
+                    add("google_json_parse", "Google service account JSON parses", False, "empty body after URL fetch or env")
+                    overall = False
+                else:
+                    _, method = _parse_google_service_account_json_with_method(raw)
+                    add(
+                        "google_json_parse",
+                        "Google service account JSON parses",
+                        True,
+                        f'ok — credential source: "{src}", parse method: "{method}" (base64 then plain JSON)',
+                    )
             except Exception as e:
                 add("google_json_parse", "Google service account JSON parses", False, str(e))
                 overall = False
         else:
-            add("google_json_parse", "Google service account JSON parses", False, "skipped — no raw string")
+            add("google_json_parse", "Google service account JSON parses", False, "skipped — no URL or env JSON")
             overall = False
 
         folder = _env_first("GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID", "GOOGLE_DRIVE_PARENT_ID")
@@ -392,6 +478,7 @@ def upload_config_detail() -> Dict[str, Any]:
 def upload_config_ok() -> bool:
     """
     True when all credentials for R2, Google Drive, Qdrant, and Voyage are present and valid.
+    Google: GOOGLE_SERVICE_ACCOUNT_URL (fetch) or GOOGLE_SERVICE_ACCOUNT_JSON (inline base64 or JSON).
     Logs each failed check at WARNING and prints to stdout (Railway logs).
     """
     detail = upload_config_detail()
