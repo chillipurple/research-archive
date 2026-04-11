@@ -90,9 +90,22 @@ _max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 app.config["MAX_CONTENT_LENGTH"] = _max_upload_mb * 1024 * 1024
 
 try:
-    from pdf_ingest import ingest_pdf, upload_config_ok
+    from pdf_ingest import ingest_pdf, upload_config_detail, upload_config_ok
 except ImportError:  # pragma: no cover
     ingest_pdf = None  # type: ignore
+
+    def upload_config_detail() -> dict:  # type: ignore
+        return {
+            "ok": False,
+            "checks": [
+                {
+                    "id": "pdf_ingest_import",
+                    "name": "pdf_ingest module",
+                    "ok": False,
+                    "detail": "not importable (install boto3, google-api-python-client, etc.)",
+                }
+            ],
+        }
 
     def upload_config_ok() -> bool:  # type: ignore
         return False
@@ -572,6 +585,16 @@ def admin_debug():
     return jsonify(
         {k: bool(_clean_env_str(os.environ.get(k))) for k in _ADMIN_DEBUG_ENV_KEYS}
     )
+
+
+@app.route("/admin/api/upload-debug")
+def admin_upload_debug():
+    """
+    Detailed pass/fail for each upload_config_ok check (same logic as ingest).
+    Does not expose secret values.
+    """
+    detail = upload_config_detail()
+    return jsonify(detail)
 
 
 @app.route("/admin/api/upload", methods=["POST"])

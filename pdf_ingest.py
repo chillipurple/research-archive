@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 import boto3
 import voyageai
@@ -295,32 +298,107 @@ def ingest_pdf(local_path: Path, filename: str) -> Dict[str, Any]:
         return {"ok": False, "steps": steps, "error": str(e), "chunks_upserted": 0}
 
 
+def _which_qdrant_key_source() -> str:
+    if _clean_env_value(os.environ.get("QDRANT_API_KEY")):
+        return "QDRANT_API_KEY"
+    if _clean_env_value(os.environ.get("HEP_QDRANT_API_KEY")):
+        return "HEP_QDRANT_API_KEY"
+    if _clean_env_value(os.environ.get("QDRANT_KEY")):
+        return "QDRANT_KEY"
+    return ""
+
+
+def upload_config_detail() -> Dict[str, Any]:
+    """
+    Per-check pass/fail for admin debugging. No secret values are included.
+    """
+    checks: List[Dict[str, Any]] = []
+
+    def add(cid: str, name: str, ok: bool, detail: str = "") -> None:
+        checks.append({"id": cid, "name": name, "ok": ok, "detail": detail})
+
+    overall = True
+
+    try:
+        ep = _env_first("R2_ENDPOINT_URL", "S3_ENDPOINT_URL", "AWS_ENDPOINT_URL")
+        ok = bool(ep)
+        add("r2_endpoint", "R2 / S3 endpoint URL", ok, "resolved" if ok else "missing (try R2_ENDPOINT_URL or S3_ENDPOINT_URL)")
+        overall = overall and ok
+
+        kid = _env_first("R2_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID")
+        ok = bool(kid)
+        add("r2_access_key_id", "R2 access key id", ok, "resolved" if ok else "missing (R2_ACCESS_KEY_ID or AWS_ACCESS_KEY_ID)")
+        overall = overall and ok
+
+        sec = _env_first("R2_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY")
+        ok = bool(sec)
+        add("r2_secret_access_key", "R2 secret access key", ok, "resolved" if ok else "missing")
+        overall = overall and ok
+
+        bucket = _env_first("R2_BUCKET_NAME", "S3_BUCKET_NAME", "AWS_S3_BUCKET")
+        ok = bool(bucket)
+        add("r2_bucket", "R2 bucket name", ok, "resolved" if ok else "missing (R2_BUCKET_NAME or aliases)")
+        overall = overall and ok
+
+        graw = _env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        ok = bool(graw)
+        add("google_json_present", "Google service account JSON (non-empty)", ok, "present" if ok else "missing")
+        overall = overall and ok
+
+        if graw:
+            try:
+                _parse_google_service_account_dict(graw)
+                add("google_json_parse", "Google service account JSON parses", True, "valid JSON (or base64 JSON)")
+            except Exception as e:
+                add("google_json_parse", "Google service account JSON parses", False, str(e))
+                overall = False
+        else:
+            add("google_json_parse", "Google service account JSON parses", False, "skipped — no raw string")
+            overall = False
+
+        folder = _env_first("GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID", "GOOGLE_DRIVE_PARENT_ID")
+        ok = bool(folder)
+        add("google_drive_folder", "Google Drive folder id", ok, "resolved" if ok else "missing")
+        overall = overall and ok
+
+        qurl = _clean_env_value(os.environ.get("QDRANT_URL"))
+        ok = bool(qurl)
+        add("qdrant_url", "QDRANT_URL", ok, "set" if ok else "missing or empty after cleaning")
+        overall = overall and ok
+
+        qsrc = _which_qdrant_key_source()
+        qkey_ok = bool(qsrc)
+        add(
+            "qdrant_api_key",
+            "Qdrant API key (QDRANT_API_KEY or HEP_QDRANT_API_KEY or QDRANT_KEY)",
+            qkey_ok,
+            f"from {qsrc}" if qsrc else "none of QDRANT_API_KEY, HEP_QDRANT_API_KEY, QDRANT_KEY are set",
+        )
+        overall = overall and qkey_ok
+
+        voy = _clean_env_value(os.environ.get("VOYAGE_API_KEY"))
+        ok = bool(voy)
+        add("voyage_api_key", "VOYAGE_API_KEY", ok, "set" if ok else "missing or empty after cleaning")
+        overall = overall and ok
+
+    except Exception as e:
+        add("exception", "Unexpected error during checks", False, str(e))
+        overall = False
+        logger.exception("upload_config_detail failed")
+
+    return {"ok": overall, "checks": checks}
+
+
 def upload_config_ok() -> bool:
     """
     True when all credentials for R2, Google Drive, Qdrant, and Voyage are present and valid.
-    Uses the same env resolution as runtime (aliases + cleaned JSON).
+    Logs each failed check at WARNING and prints to stdout (Railway logs).
     """
-    try:
-        if not _env_first("R2_ENDPOINT_URL", "S3_ENDPOINT_URL", "AWS_ENDPOINT_URL"):
-            return False
-        if not _env_first("R2_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"):
-            return False
-        if not _env_first("R2_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"):
-            return False
-        if not _env_first("R2_BUCKET_NAME", "S3_BUCKET_NAME", "AWS_S3_BUCKET"):
-            return False
-        graw = _env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON")
-        if not graw:
-            return False
-        _parse_google_service_account_dict(graw)
-        if not _env_first("GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID", "GOOGLE_DRIVE_PARENT_ID"):
-            return False
-        if not _clean_env_value(os.environ.get("QDRANT_URL")):
-            return False
-        if not _qdrant_api_key():
-            return False
-        if not _clean_env_value(os.environ.get("VOYAGE_API_KEY")):
-            return False
-        return True
-    except Exception:
-        return False
+    detail = upload_config_detail()
+    if not detail["ok"]:
+        for c in detail["checks"]:
+            if not c.get("ok"):
+                msg = f"upload_config_ok FAIL: {c.get('id')}: {c.get('name')} — {c.get('detail', '')}"
+                logger.warning(msg)
+                print(msg, flush=True)
+    return bool(detail["ok"])
