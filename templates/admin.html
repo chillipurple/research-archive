@@ -171,11 +171,17 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
     <p class="status-error" id="statusError" style="display:none;margin-top:10px;"></p>
   </div>
 
-  {% if not upload_ready %}
+  {% if not ingest_available %}
+  <div class="config-warn">
+    Upload module did not load (missing Python dependencies). Ensure <code>boto3</code> and Google API packages are installed and redeploy.
+  </div>
+  {% elif not upload_ready %}
   <div class="config-warn">
     Upload is disabled: set <code>R2_ACCESS_KEY_ID</code>, <code>R2_SECRET_ACCESS_KEY</code>,
     <code>R2_BUCKET_NAME</code>, <code>R2_ENDPOINT_URL</code>,
-    <code>GOOGLE_SERVICE_ACCOUNT_JSON</code>, and <code>GOOGLE_DRIVE_FOLDER_ID</code> in the environment.
+    <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> (valid JSON), <code>GOOGLE_DRIVE_FOLDER_ID</code>,
+    <code>QDRANT_URL</code>, <code>QDRANT_API_KEY</code>, and <code>VOYAGE_API_KEY</code>.
+    If the JSON secret is pasted with extra quotes, it is stripped automatically.
   </div>
   {% endif %}
 
@@ -213,6 +219,7 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
   const chunkCount = document.getElementById('chunkCount');
   const statusError = document.getElementById('statusError');
   const uploadReady = {{ upload_ready | tojson }};
+  const ingestAvailable = {{ ingest_available | tojson }};
   const maxMb = {{ max_mb }};
 
   let selectedFile = null;
@@ -266,7 +273,7 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
 
   function setFile(f) {
     selectedFile = f;
-    uploadBtn.disabled = !uploadReady || !f;
+    uploadBtn.disabled = !ingestAvailable || !uploadReady || !f;
     setMessages('<div class="msg ok">Selected: <strong>' + escapeHtml(f.name) + '</strong> (' + formatSize(f.size) + ')</div>');
   }
 

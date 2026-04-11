@@ -5,6 +5,7 @@ Reuses chunking and embedding helpers from build_embeddings.py.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import uuid
@@ -35,13 +36,50 @@ from build_embeddings import (
 GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
+def _clean_env_value(val: str | None) -> str:
+    """Strip whitespace, BOM, and surrounding quotes (common when pasting JSON into Railway)."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s.startswith("\ufeff"):
+        s = s.lstrip("\ufeff")
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        s = s[1:-1].strip()
+    return s
+
+
+def _env_first(*keys: str) -> str:
+    """Return the first non-empty cleaned value for the given env var names (canonical names first)."""
+    for k in keys:
+        v = _clean_env_value(os.environ.get(k))
+        if v:
+            return v
+    return ""
+
+
+def _parse_google_service_account_dict(raw: str) -> dict:
+    """Parse JSON from env; supports base64-encoded JSON (some deployment platforms)."""
+    raw = _clean_env_value(raw)
+    if not raw:
+        raise ValueError("empty Google service account JSON")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    try:
+        decoded = base64.b64decode(raw).decode("utf-8")
+        return json.loads(decoded)
+    except Exception as e:
+        raise ValueError(f"invalid GOOGLE_SERVICE_ACCOUNT_JSON: {e}") from e
+
+
 def _qdrant_api_key() -> str:
     key = (
-        os.environ.get("QDRANT_API_KEY")
-        or os.environ.get("HEP_QDRANT_API_KEY")
-        or os.environ.get("QDRANT_KEY")
+        _clean_env_value(os.environ.get("QDRANT_API_KEY"))
+        or _clean_env_value(os.environ.get("HEP_QDRANT_API_KEY"))
+        or _clean_env_value(os.environ.get("QDRANT_KEY"))
         or ""
-    ).strip()
+    )
     if key.lower().startswith("bearer "):
         key = key[7:].strip()
     return key
@@ -63,16 +101,25 @@ def metadata_row_for_filename(filename: str) -> dict:
 
 
 def _r2_client():
+    endpoint = _env_first("R2_ENDPOINT_URL", "S3_ENDPOINT_URL", "AWS_ENDPOINT_URL")
+    key_id = _env_first("R2_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID")
+    secret = _env_first("R2_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY")
+    if not all([endpoint, key_id, secret]):
+        raise RuntimeError(
+            "R2 credentials missing: set R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
+        )
     return boto3.client(
         "s3",
-        endpoint_url=os.environ["R2_ENDPOINT_URL"].strip(),
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"].strip(),
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"].strip(),
+        endpoint_url=endpoint,
+        aws_access_key_id=key_id,
+        aws_secret_access_key=secret,
     )
 
 
 def upload_r2(local_path: Path, filename: str) -> str:
-    bucket = os.environ["R2_BUCKET_NAME"].strip()
+    bucket = _env_first("R2_BUCKET_NAME", "S3_BUCKET_NAME", "AWS_S3_BUCKET")
+    if not bucket:
+        raise RuntimeError("R2_BUCKET_NAME is not set")
     key = f"pdfs/{filename}"
     cli = _r2_client()
     cli.upload_file(str(local_path), bucket, key)
@@ -80,9 +127,13 @@ def upload_r2(local_path: Path, filename: str) -> str:
 
 
 def upload_google_drive(local_path: Path, filename: str) -> str:
-    raw = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"].strip()
-    info = json.loads(raw)
-    folder_id = os.environ["GOOGLE_DRIVE_FOLDER_ID"].strip()
+    raw = _env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    if not raw:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is not set")
+    info = _parse_google_service_account_dict(raw)
+    folder_id = _env_first("GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID", "GOOGLE_DRIVE_PARENT_ID")
+    if not folder_id:
+        raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID is not set")
     creds = service_account.Credentials.from_service_account_info(
         info, scopes=GOOGLE_DRIVE_SCOPES
     )
@@ -220,12 +271,13 @@ def ingest_pdf(local_path: Path, filename: str) -> Dict[str, Any]:
         steps.append({"name": "google_drive", "ok": False, "detail": str(e)})
         return {"ok": False, "steps": steps, "error": str(e), "chunks_upserted": 0}
 
-    if not os.environ.get("VOYAGE_API_KEY", "").strip():
+    voyage_key = _clean_env_value(os.environ.get("VOYAGE_API_KEY"))
+    if not voyage_key:
         msg = "VOYAGE_API_KEY is not set"
         steps.append({"name": "qdrant", "ok": False, "detail": msg})
         return {"ok": False, "steps": steps, "error": msg, "chunks_upserted": 0}
 
-    url = os.environ.get("QDRANT_URL", "").strip()
+    url = _clean_env_value(os.environ.get("QDRANT_URL"))
     key = _qdrant_api_key()
     if not url or not key:
         msg = "QDRANT_URL and QDRANT_API_KEY must be set"
@@ -234,7 +286,7 @@ def ingest_pdf(local_path: Path, filename: str) -> Dict[str, Any]:
 
     try:
         qdrant = QdrantClient(url=url, api_key=key, timeout=120)
-        voy = voyageai.Client(api_key=os.environ["VOYAGE_API_KEY"].strip())
+        voy = voyageai.Client(api_key=voyage_key)
         n = embed_pdf_to_qdrant(local_path, filename, meta, qdrant, voy)
         steps.append({"name": "qdrant", "ok": True, "detail": f"{n} chunks upserted"})
         return {"ok": True, "steps": steps, "error": None, "chunks_upserted": n}
@@ -244,14 +296,31 @@ def ingest_pdf(local_path: Path, filename: str) -> Dict[str, Any]:
 
 
 def upload_config_ok() -> bool:
+    """
+    True when all credentials for R2, Google Drive, Qdrant, and Voyage are present and valid.
+    Uses the same env resolution as runtime (aliases + cleaned JSON).
+    """
     try:
-        return bool(
-            os.environ.get("R2_ENDPOINT_URL", "").strip()
-            and os.environ.get("R2_ACCESS_KEY_ID", "").strip()
-            and os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
-            and os.environ.get("R2_BUCKET_NAME", "").strip()
-            and os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-            and os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
-        )
+        if not _env_first("R2_ENDPOINT_URL", "S3_ENDPOINT_URL", "AWS_ENDPOINT_URL"):
+            return False
+        if not _env_first("R2_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"):
+            return False
+        if not _env_first("R2_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"):
+            return False
+        if not _env_first("R2_BUCKET_NAME", "S3_BUCKET_NAME", "AWS_S3_BUCKET"):
+            return False
+        graw = _env_first("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        if not graw:
+            return False
+        _parse_google_service_account_dict(graw)
+        if not _env_first("GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID", "GOOGLE_DRIVE_PARENT_ID"):
+            return False
+        if not _clean_env_value(os.environ.get("QDRANT_URL")):
+            return False
+        if not _qdrant_api_key():
+            return False
+        if not _clean_env_value(os.environ.get("VOYAGE_API_KEY")):
+            return False
+        return True
     except Exception:
         return False

@@ -40,9 +40,23 @@ INDEX_URL = os.environ.get("HEP_INDEX_URL", "").strip() or None
 INDEX_FILE = Path(os.environ.get("HEP_INDEX_FILE", str(BASE_DIR / "data" / "_vector_index.pkl"))).resolve()
 
 # Semantic search (Qdrant + Voyage)
-VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "").strip()
+
+
+def _clean_env_str(val: str | None) -> str:
+    """Match pdf_ingest: strip BOM and surrounding quotes (Railway / pasted secrets)."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s.startswith("\ufeff"):
+        s = s.lstrip("\ufeff")
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        s = s[1:-1].strip()
+    return s
+
+
+VOYAGE_API_KEY = _clean_env_str(os.environ.get("VOYAGE_API_KEY"))
 VOYAGE_MODEL = os.environ.get("VOYAGE_MODEL", "voyage-3").strip() or "voyage-3"
-QDRANT_URL = os.environ.get("QDRANT_URL", "").strip()
+QDRANT_URL = _clean_env_str(os.environ.get("QDRANT_URL"))
 
 
 def _read_qdrant_api_key() -> str:
@@ -50,11 +64,11 @@ def _read_qdrant_api_key() -> str:
     Read Qdrant API key from env, supporting common legacy aliases.
     """
     key = (
-        os.environ.get("QDRANT_API_KEY")
-        or os.environ.get("HEP_QDRANT_API_KEY")
-        or os.environ.get("QDRANT_KEY")
+        _clean_env_str(os.environ.get("QDRANT_API_KEY"))
+        or _clean_env_str(os.environ.get("HEP_QDRANT_API_KEY"))
+        or _clean_env_str(os.environ.get("QDRANT_KEY"))
         or ""
-    ).strip()
+    )
     if key.lower().startswith("bearer "):
         key = key[7:].strip()
     return key
@@ -515,10 +529,12 @@ def rebuild():
 @app.route("/admin")
 def admin_page():
     logo_url = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
+    ingest_ok = ingest_pdf is not None
     return render_template(
         "admin.html",
         logo_url=logo_url,
-        upload_ready=bool(ingest_pdf is not None and upload_config_ok()),
+        ingest_available=ingest_ok,
+        upload_ready=bool(ingest_ok and upload_config_ok()),
         max_mb=_max_upload_mb,
     )
 
