@@ -69,11 +69,11 @@ HEP_PDF_BASE_URL = os.environ.get(
 client = anthropic.Anthropic()
 app = Flask(__name__)
 
-# ── Basic Auth (recommended for public deployment) ─────────────────────────────
+# ── HTTP Basic Auth (optional: set AUTH_USERNAME + AUTH_PASSWORD in production) ─
 
-AUTH_USER = os.environ.get("HEP_AUTH_USER", "").strip()
-AUTH_PASS = os.environ.get("HEP_AUTH_PASS", "").strip()
-AUTH_ENABLED = bool(AUTH_USER and AUTH_PASS)
+AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "").strip()
+AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "").strip()
+AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
 
 
 def _unauthorized() -> Response:
@@ -88,11 +88,10 @@ def _unauthorized() -> Response:
 def _require_basic_auth():
     if not AUTH_ENABLED:
         return None
-    # Always allow Railway health checks.
     if request.path == "/health":
         return None
     auth = request.authorization
-    if not auth or auth.username != AUTH_USER or auth.password != AUTH_PASS:
+    if not auth or auth.username != AUTH_USERNAME or auth.password != AUTH_PASSWORD:
         return _unauthorized()
     return None
 
