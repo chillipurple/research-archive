@@ -282,6 +282,35 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 }
 
 .stats { font-size: 0.75rem; color: #5a3d5f; text-align: right; margin-top: 16px; font-style: italic; }
+
+/* Markdown heading styles inside answers */
+.answer-h1, .answer-h2, .answer-h3 {
+  font-family: 'Oswald', sans-serif;
+  font-weight: 400;
+  color: var(--gold);
+  letter-spacing: 0.06em;
+  margin: 1.2em 0 0.4em;
+}
+.answer-h1 { font-size: 1.05rem; text-transform: uppercase; }
+.answer-h2 { font-size: 0.95rem; text-transform: uppercase; color: var(--light-purple); }
+.answer-h3 { font-size: 0.9rem; color: var(--text-muted); }
+
+/* Page references in citation meta */
+.citation-pages {
+  color: var(--light-purple);
+  font-size: 0.78rem;
+}
+
+/* Source excerpt below citation meta */
+.citation-excerpt {
+  margin-top: 7px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+  font-style: italic;
+}
 </style>
 </head>
 <body>
@@ -375,12 +404,55 @@ function formatCitationsAsSup(text) {
   return out;
 }
 
+function renderMarkdown(text) {
+  // Process line by line for block elements, then inline
+  const lines = text.split('\n');
+  const blocks = [];
+  let paraLines = [];
+
+  function flushPara() {
+    if (paraLines.length) {
+      blocks.push({ type: 'p', content: paraLines.join('\n') });
+      paraLines = [];
+    }
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const h3 = line.match(/^###\s+(.+)/);
+    const h2 = line.match(/^##\s+(.+)/);
+    const h1 = line.match(/^#\s+(.+)/);
+    if (h3) { flushPara(); blocks.push({ type: 'h3', content: h3[1] }); }
+    else if (h2) { flushPara(); blocks.push({ type: 'h2', content: h2[1] }); }
+    else if (h1) { flushPara(); blocks.push({ type: 'h1', content: h1[1] }); }
+    else if (line.trim() === '') { flushPara(); }
+    else { paraLines.push(line); }
+  }
+  flushPara();
+
+  function inlineFormat(raw) {
+    // Escape HTML first, then apply inline markdown
+    let s = escapeHtml(raw);
+    // citations [1] → superscript
+    s = formatCitationsAsSup(s);
+    // **bold**
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // *italic*
+    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    return s;
+  }
+
+  return blocks.map(b => {
+    const c = inlineFormat(b.content);
+    if (b.type === 'h1') return '<h3 class="answer-h1">' + c + '</h3>';
+    if (b.type === 'h2') return '<h4 class="answer-h2">' + c + '</h4>';
+    if (b.type === 'h3') return '<h5 class="answer-h3">' + c + '</h5>';
+    return '<p>' + c + '</p>';
+  }).join('');
+}
+
 function formatAnswerToHtml(answerText) {
-  const escaped = escapeHtml(answerText);
-  const withSupCites = formatCitationsAsSup(escaped);
-  return withSupCites
-    .split('\n\n').map(p => p.trim()).filter(Boolean)
-    .map(p => '<p>' + p + '</p>').join('');
+  return renderMarkdown(answerText);
 }
 
 async function doSearch() {
@@ -463,12 +535,38 @@ async function doSearch() {
         spDot.textContent = '\u00b7';
         const spYear = document.createElement('span');
         spYear.textContent = c.year != null ? String(c.year) : '';
+
+        // Fix 3: page reference display
+        const pageRef = (c.page_start && c.page_end)
+          ? 'pp. ' + String(c.page_start) + '\u2013' + String(c.page_end)
+          : (c.page_start ? 'p. ' + String(c.page_start) : '');
+
         const spCat = document.createElement('span');
         spCat.className = 'citation-category';
         spCat.textContent = c.category != null ? String(c.category) : '';
-        meta.append(spAuthors, spDot, spYear, spCat);
+
+        const metaChildren = [spAuthors, spDot, spYear];
+        if (pageRef) {
+          const spPage = document.createElement('span');
+          spPage.className = 'citation-pages';
+          spPage.textContent = pageRef;
+          metaChildren.push(document.createTextNode('\u00b7'), spPage);
+        }
+        metaChildren.push(spCat);
+        meta.append(...metaChildren);
 
         body.appendChild(meta);
+
+        // Fix 2: source excerpt
+        const excerptText = c.excerpt != null ? String(c.excerpt).trim() : '';
+        if (excerptText) {
+          const excerpt = document.createElement('div');
+          excerpt.className = 'citation-excerpt';
+          excerpt.textContent = excerptText.length > 300
+            ? excerptText.slice(0, 300) + '\u2026'
+            : excerptText;
+          body.appendChild(excerpt);
+        }
         item.append(num, body);
         citationList.appendChild(item);
       });

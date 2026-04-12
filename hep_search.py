@@ -35,12 +35,10 @@ RESEARCH_DIR = Path(RESEARCH_DIR_ENV) if RESEARCH_DIR_ENV else None
 OUTPUT_CSV = (RESEARCH_DIR / "_research_index.csv") if RESEARCH_DIR else None
 
 # Cloud/runtime index configuration (recommended for deployment).
-# Provide HEP_INDEX_URL to download the pre-built pickle at startup (Railway + R2, per handover Section 6).
 INDEX_URL = os.environ.get("HEP_INDEX_URL", "").strip() or None
 INDEX_FILE = Path(os.environ.get("HEP_INDEX_FILE", str(BASE_DIR / "data" / "_vector_index.pkl"))).resolve()
 
 # Semantic search (Qdrant + Voyage)
-
 
 def _clean_env_str(val: str | None) -> str:
     """Match pdf_ingest: strip BOM and surrounding quotes (Railway / pasted secrets)."""
@@ -56,13 +54,15 @@ def _clean_env_str(val: str | None) -> str:
 
 VOYAGE_API_KEY = _clean_env_str(os.environ.get("VOYAGE_API_KEY"))
 VOYAGE_MODEL = os.environ.get("VOYAGE_MODEL", "voyage-3").strip() or "voyage-3"
+VOYAGE_RERANK_MODEL = os.environ.get("VOYAGE_RERANK_MODEL", "rerank-2").strip() or "rerank-2"
+RERANK_ENABLED = os.environ.get("RERANK_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+HYBRID_TOP_K = int(os.environ.get("HYBRID_TOP_K", "20"))   # candidates fetched before rerank
+FINAL_TOP_K  = int(os.environ.get("FINAL_TOP_K",  "8"))    # results returned to Claude
+
 QDRANT_URL = _clean_env_str(os.environ.get("QDRANT_URL"))
 
 
 def _read_qdrant_api_key() -> str:
-    """
-    Read Qdrant API key from env, supporting common legacy aliases.
-    """
     key = (
         _clean_env_str(os.environ.get("QDRANT_API_KEY"))
         or _clean_env_str(os.environ.get("HEP_QDRANT_API_KEY"))
@@ -91,10 +91,10 @@ app.config["MAX_CONTENT_LENGTH"] = _max_upload_mb * 1024 * 1024
 
 try:
     from pdf_ingest import ingest_pdf, upload_config_detail, upload_config_ok
-except ImportError:  # pragma: no cover
-    ingest_pdf = None  # type: ignore
+except ImportError:
+    ingest_pdf = None
 
-    def upload_config_detail() -> dict:  # type: ignore
+    def upload_config_detail() -> dict:
         return {
             "ok": False,
             "checks": [
@@ -107,10 +107,10 @@ except ImportError:  # pragma: no cover
             ],
         }
 
-    def upload_config_ok() -> bool:  # type: ignore
+    def upload_config_ok() -> bool:
         return False
 
-# ── HTTP Basic Auth (optional: set AUTH_USERNAME + AUTH_PASSWORD in production) ─
+# ── HTTP Basic Auth ────────────────────────────────────────────────────────────
 
 AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "").strip()
 AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "").strip()
@@ -205,7 +205,7 @@ def get_qdrant_client() -> QdrantClient:
     global _qdrant
     if _qdrant is None:
         if not QDRANT_URL or not QDRANT_API_KEY:
-            raise RuntimeError("QDRANT_URL and QDRANT_API_KEY (or HEP_QDRANT_API_KEY) must be set")
+            raise RuntimeError("QDRANT_URL and QDRANT_API_KEY must be set")
         _qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=60)
     return _qdrant
 
@@ -217,7 +217,6 @@ def embed_query(text: str) -> list:
 
 
 def pdf_url_for_filename(filename: str) -> str:
-    """HTTPS URL to the PDF on R2: base URL + path-safe filename."""
     if not filename:
         return ""
     return f"{HEP_PDF_BASE_URL}/{quote(filename, safe='')}"
@@ -232,7 +231,6 @@ def _download_file(url: str, dest: Path) -> None:
         req = urllib.request.Request(
             url,
             headers={
-                # Some CDNs return 403 for unknown/empty user agents.
                 "User-Agent": "Mozilla/5.0 (compatible; HEPResearchLibrary/1.0; +https://hopeeducationproject.org)",
                 "Accept": "*/*",
             },
@@ -255,8 +253,7 @@ def ensure_index_present() -> None:
     if not INDEX_URL:
         raise FileNotFoundError(
             f"Index file not found at '{INDEX_FILE}'. "
-            "Set HEP_INDEX_URL to a downloadable _vector_index.pkl for cloud deployment, "
-            "or set HEP_RESEARCH_DIR to rebuild locally."
+            "Set HEP_INDEX_URL to a downloadable _vector_index.pkl for cloud deployment."
         )
     print(f"Downloading index from {INDEX_URL} ...")
     try:
@@ -271,15 +268,12 @@ def _load_index_from_disk() -> dict:
 
 
 def build_index() -> dict:
-    # Prefer pre-built index (local or downloaded) when present.
     ensure_index_present()
     if INDEX_FILE.exists():
         print("Loading existing index...")
         try:
             return _load_index_from_disk()
         except Exception as e:
-            # If the wrong file was downloaded (e.g. URL misconfigured), recover by
-            # deleting and re-downloading from HEP_INDEX_URL.
             print(f"Failed to load index from disk ({INDEX_FILE}): {e}")
             try:
                 INDEX_FILE.unlink()
@@ -336,7 +330,6 @@ def build_index() -> dict:
 
     print("Building vocabulary...")
     vocab = build_vocab(documents)
-    print(f"Vocabulary size: {len(vocab)} terms")
 
     print("Computing embeddings...")
     for i, doc in enumerate(documents, 1):
@@ -371,37 +364,184 @@ def search(query: str, index: dict, category: str = "All", top_k: int = 8) -> li
     return results[:top_k]
 
 
-def semantic_search(query: str, category: str = "All", top_k: int = 8) -> list:
-    """
-    Returns Qdrant hits as (score, payload_dict).
-    """
-    qdrant = get_qdrant_client()
-    vec = embed_query(query)
+# ── Keyword helpers ───────────────────────────────────────────────────────────
 
+def _tokenise_query(text: str) -> list[str]:
+    """Simple tokeniser for BM25 keyword matching."""
+    return re.findall(r"[a-z]{3,}", text.lower())
+
+
+def _scroll_by_category(qdrant: QdrantClient, category: str, limit: int = 2000) -> list:
+    """
+    Fetch payloads via Qdrant scroll for in-process BM25 search.
+    Fetches all chunks for the given category (or all categories).
+    """
     filt = None
     if category and category != "All":
         filt = qm.Filter(
-            must=[
-                qm.FieldCondition(
-                    key="category",
-                    match=qm.MatchValue(value=category),
-                )
-            ]
+            must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
         )
+    records, _next = qdrant.scroll(
+        collection_name=QDRANT_COLLECTION,
+        scroll_filter=filt,
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return records
 
+
+def _bm25_search(query: str, records: list, top_k: int) -> list[tuple[float, dict]]:
+    """
+    BM25 over a list of Qdrant scroll records.
+    Returns (score, payload) pairs sorted descending.
+    """
+    from math import log
+
+    tokens = _tokenise_query(query)
+    if not tokens or not records:
+        return []
+
+    corpus: list[list[str]] = []
+    for r in records:
+        payload = dict(r.payload or {})
+        text = " ".join(filter(None, [
+            payload.get("title", ""),
+            payload.get("text", ""),
+            payload.get("authors", ""),
+        ]))
+        corpus.append(_tokenise_query(text))
+
+    N = len(corpus)
+    k1, b = 1.5, 0.75
+    avgdl = sum(len(d) for d in corpus) / N if N else 1
+
+    idf: dict[str, float] = {}
+    for t in set(tokens):
+        df = sum(1 for d in corpus if t in d)
+        idf[t] = log((N - df + 0.5) / (df + 0.5) + 1)
+
+    scores: list[float] = []
+    for doc in corpus:
+        dl = len(doc)
+        freq: dict[str, int] = {}
+        for w in doc:
+            freq[w] = freq.get(w, 0) + 1
+        s = 0.0
+        for t in tokens:
+            f = freq.get(t, 0)
+            s += idf.get(t, 0) * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+        scores.append(s)
+
+    ranked = sorted(zip(scores, records), key=lambda x: x[0], reverse=True)[:top_k]
+    return [(sc, dict(r.payload or {})) for sc, r in ranked if sc > 0]
+
+
+def _rrf_merge(
+    vector_hits: list[tuple[float, dict]],
+    keyword_hits: list[tuple[float, dict]],
+    k: int = 60,
+    top_n: int = 20,
+) -> list[tuple[float, dict]]:
+    """
+    Reciprocal Rank Fusion: merges two ranked lists into one.
+    Deduplicates by (filename, chunk_index).
+    """
+    def _key(payload: dict) -> tuple:
+        return (payload.get("filename", ""), payload.get("chunk_index", -1))
+
+    rrf_scores: dict[tuple, float] = {}
+    payloads: dict[tuple, dict] = {}
+
+    for rank, (_, payload) in enumerate(vector_hits, start=1):
+        key = _key(payload)
+        rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (k + rank)
+        payloads[key] = payload
+
+    for rank, (_, payload) in enumerate(keyword_hits, start=1):
+        key = _key(payload)
+        rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (k + rank)
+        payloads[key] = payload
+
+    ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    return [(score, payloads[key]) for key, score in ranked]
+
+
+def _rerank(query: str, candidates: list[tuple[float, dict]], top_n: int) -> list[tuple[float, dict]]:
+    """
+    Rerank candidates using Voyage rerank-2.
+    Falls back to RRF order if reranking fails or is disabled.
+    """
+    if not RERANK_ENABLED or not candidates:
+        return candidates[:top_n]
+    try:
+        voy = get_voyage_client()
+        docs = [
+            " ".join(filter(None, [
+                p.get("title", ""),
+                p.get("text", "")[:1000],
+            ]))
+            for _, p in candidates
+        ]
+        result = voy.rerank(
+            query=query,
+            documents=docs,
+            model=VOYAGE_RERANK_MODEL,
+            top_k=top_n,
+        )
+        reranked = []
+        for item in result.results:
+            score = float(item.relevance_score)
+            payload = candidates[item.index][1]
+            reranked.append((score, payload))
+        return reranked
+    except Exception as e:
+        print(f"[rerank] warning: {e} — falling back to RRF order")
+        return candidates[:top_n]
+
+
+# ── Public search entry point ─────────────────────────────────────────────────
+
+def semantic_search(query: str, category: str = "All", top_k: int = 8) -> list:
+    """
+    Hybrid retrieval: vector search + BM25 keyword search merged via RRF,
+    then reranked with Voyage rerank-2.
+    Returns (score, payload_dict) pairs.
+
+    top_k is accepted for backwards compatibility but FINAL_TOP_K env var
+    controls the actual result count (default 8).
+    """
+    qdrant = get_qdrant_client()
+
+    # 1. Vector search — fetch HYBRID_TOP_K candidates
+    vec = embed_query(query)
+    filt = None
+    if category and category != "All":
+        filt = qm.Filter(
+            must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
+        )
     response = qdrant.query_points(
         collection_name=QDRANT_COLLECTION,
         query=vec,
-        limit=top_k,
+        limit=HYBRID_TOP_K,
         with_payload=True,
         with_vectors=False,
         query_filter=filt,
     )
-    hits = response.points
-    out = []
-    for h in hits:
-        out.append((float(h.score), dict(h.payload or {})))
-    return out
+    vector_hits = [(float(h.score), dict(h.payload or {})) for h in response.points]
+
+    # 2. BM25 keyword search over scrolled corpus
+    records = _scroll_by_category(qdrant, category, limit=2000)
+    keyword_hits = _bm25_search(query, records, top_k=HYBRID_TOP_K)
+
+    # 3. RRF merge and deduplicate
+    merged = _rrf_merge(vector_hits, keyword_hits, top_n=HYBRID_TOP_K)
+
+    # 4. Voyage rerank
+    final = _rerank(query, merged, top_n=FINAL_TOP_K)
+
+    return final
+
 
 # ── Answer Generation ─────────────────────────────────────────────────────────
 
@@ -414,7 +554,6 @@ def generate_answer(query: str, results: list) -> dict:
     doc_url_template = os.environ.get("HEP_DOC_URL_TEMPLATE", "").strip()
 
     for i, (score, doc) in enumerate(results, 1):
-        # `doc` here is a Qdrant payload dict produced by build_embeddings.py
         title = doc.get("title") or doc.get("filename") or "Unknown title"
         authors = doc.get("authors") or "Unknown"
         year = doc.get("year") or "n.d."
@@ -447,6 +586,7 @@ def generate_answer(query: str, results: list) -> dict:
             "page_end": page_end,
             "chunk_index": chunk_index,
             "pdf_url": pdf_url_for_filename(filename),
+            "excerpt": chunk_text[:300] if chunk_text else "",
         }
         if doc_url_template and "{filename}" in doc_url_template:
             citation["url"] = doc_url_template.replace("{filename}", filename)
@@ -493,7 +633,6 @@ def get_index():
 
 @app.route("/")
 def home():
-    # In Qdrant mode, document count is not loaded from a local pickle index.
     doc_count = "Qdrant"
     logo_url = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
     return render_template("index.html", doc_count=doc_count, logo_url=logo_url)
@@ -517,8 +656,7 @@ def search_route():
     if not query:
         return jsonify({"error": "No query provided"})
     try:
-        # Semantic search via Qdrant + Voyage
-        hits = semantic_search(query, category=category, top_k=8)
+        hits = semantic_search(query, category=category)
         return jsonify(generate_answer(query, hits))
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -526,11 +664,12 @@ def search_route():
 
 @app.route("/health")
 def health():
-    # Keep health checks fast and non-blocking: no network calls here.
     return jsonify({
         "ok": True,
         "qdrant_configured": bool(QDRANT_URL and QDRANT_API_KEY),
         "qdrant_lazy_connect": True,
+        "hybrid_retrieval": True,
+        "rerank_enabled": RERANK_ENABLED,
     }), 200
 
 
@@ -579,10 +718,6 @@ _ADMIN_DEBUG_ENV_KEYS = (
 
 @app.route("/admin/api/debug")
 def admin_debug():
-    """
-    Returns True/False per key: whether a non-empty value exists after the same cleaning
-    used for secrets (strip, BOM, surrounding quotes). No secret values are returned.
-    """
     return jsonify(
         {k: bool(_clean_env_str(os.environ.get(k))) for k in _ADMIN_DEBUG_ENV_KEYS}
     )
@@ -590,10 +725,6 @@ def admin_debug():
 
 @app.route("/admin/api/upload-debug")
 def admin_upload_debug():
-    """
-    Detailed pass/fail for each upload_config_ok check (same logic as ingest).
-    Does not expose secret values.
-    """
     detail = upload_config_detail()
     return jsonify(detail)
 
@@ -650,6 +781,5 @@ if __name__ == "__main__":
     print("Starting API server...")
     print("Open http://localhost:5000 when ready.")
     print()
-    print("Server running at http://localhost:5000")
     port = int(os.environ.get("PORT", "5000"))
     app.run(debug=False, host="0.0.0.0", port=port)
