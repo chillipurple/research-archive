@@ -857,6 +857,97 @@ function _buildCatButtons() {
   });
 }
 
+async function _loadSimilar(filename, title) {
+  // Show a "similar documents" panel inside the discover panel
+  const results = document.getElementById('discoverResults');
+  results.innerHTML = `<div class="discover-loading">Finding documents similar to <em>${escapeHtml(title)}</em>...</div>`;
+
+  // Clear active category buttons - we're in a different mode now
+  document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+  _discoverCat = null;
+
+  try {
+    const res  = await fetch('/similar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, title, limit: 12 })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+
+    results.innerHTML = '';
+
+    // Back link
+    const backBar = document.createElement('div');
+    backBar.style.cssText = 'margin-bottom:14px;display:flex;align-items:center;gap:10px;';
+    const backLink = document.createElement('span');
+    backLink.className   = 'discover-search-link';
+    backLink.textContent = '\u2190 Back to categories';
+    backLink.onclick     = () => { results.innerHTML = ''; };
+    const similarLabel = document.createElement('span');
+    similarLabel.style.cssText = 'font-size:0.78rem;color:var(--text-muted);';
+    similarLabel.textContent   = `Documents similar to: ${title}`;
+    backBar.append(backLink, similarLabel);
+    results.appendChild(backBar);
+
+    if (!data.documents.length) {
+      results.innerHTML += '<div class="discover-loading">No similar documents found.</div>';
+      return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'discover-results';
+
+    data.documents.forEach(doc => {
+      const card = document.createElement('div');
+      card.className = 'discover-card';
+
+      const title_el = document.createElement('div');
+      title_el.className   = 'discover-card-title';
+      title_el.textContent = doc.title || 'Unknown';
+
+      const meta = document.createElement('div');
+      meta.className = 'discover-card-meta';
+      const metaParts = [doc.authors, doc.year, doc.category].filter(Boolean);
+      meta.textContent = metaParts.join(' · ');
+
+      const excerpt = document.createElement('div');
+      excerpt.className   = 'discover-card-excerpt';
+      excerpt.textContent = doc.excerpt
+        ? (doc.excerpt.length > 180 ? doc.excerpt.slice(0, 180) + '\u2026' : doc.excerpt)
+        : '';
+
+      const actions = document.createElement('div');
+      actions.className = 'discover-card-actions';
+
+      if (doc.pdf_url) {
+        const pdfLink = document.createElement('a');
+        pdfLink.className   = 'discover-pdf-link';
+        pdfLink.href        = doc.pdf_url;
+        pdfLink.target      = '_blank';
+        pdfLink.rel         = 'noopener noreferrer';
+        pdfLink.textContent = 'View PDF';
+        actions.appendChild(pdfLink);
+      }
+
+      // Allow chaining - find similar to this one too
+      const moreLink = document.createElement('span');
+      moreLink.className   = 'discover-search-link';
+      moreLink.textContent = 'Find more like this';
+      moreLink.onclick     = () => _loadSimilar(doc.filename, doc.title);
+      actions.appendChild(moreLink);
+
+      card.append(title_el, meta, excerpt, actions);
+      grid.appendChild(card);
+    });
+
+    results.appendChild(grid);
+
+  } catch(e) {
+    results.innerHTML = '<div class="discover-loading">Failed to load similar documents: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
 async function _loadCategory(cat, btnEl) {
   // Toggle active state
   document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
@@ -921,16 +1012,11 @@ async function _loadCategory(cat, btnEl) {
         actions.appendChild(pdfLink);
       }
 
-      // "Find more like this" - seeds the search box
+      // "Find more like this" - opens similar documents panel
       const moreLink = document.createElement('span');
       moreLink.className   = 'discover-search-link';
       moreLink.textContent = 'Find more like this';
-      moreLink.onclick     = () => {
-        document.getElementById('query').value = doc.title;
-        document.getElementById('category').value = doc.category || 'All';
-        toggleDiscover();
-        doSearch();
-      };
+      moreLink.onclick     = () => _loadSimilar(doc.filename, doc.title);
       actions.appendChild(moreLink);
 
       card.append(title, meta, excerpt, actions);

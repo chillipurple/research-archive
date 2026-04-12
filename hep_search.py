@@ -700,6 +700,82 @@ def search_route():
         return jsonify({"error": str(e)})
 
 
+@app.route("/similar", methods=["POST"])
+def similar_route():
+    """
+    Find documents similar to a given document using its own vector.
+    Fetches the document's embedding from Qdrant by filename,
+    then queries for nearest neighbours. Returns deduplicated by filename.
+    """
+    data     = request.get_json()
+    filename = data.get("filename", "").strip()
+    title    = data.get("title", filename)
+    limit    = int(data.get("limit", 12))
+
+    if not filename:
+        return jsonify({"ok": False, "error": "No filename provided"}), 400
+
+    try:
+        qdrant = get_qdrant_client()
+
+        # Step 1: find a chunk from this document to get its vector
+        scroll_result, _ = qdrant.scroll(
+            collection_name=QDRANT_COLLECTION,
+            scroll_filter=qm.Filter(
+                must=[qm.FieldCondition(
+                    key="filename",
+                    match=qm.MatchValue(value=filename),
+                )]
+            ),
+            limit=1,
+            with_payload=True,
+            with_vectors=True,   # need the vector
+        )
+
+        if not scroll_result:
+            return jsonify({"ok": False, "error": f"Document not found in index: {filename}"}), 404
+
+        source_vector = scroll_result[0].vector
+
+        # Step 2: query for nearest neighbours, excluding the source document
+        response = qdrant.query_points(
+            collection_name=QDRANT_COLLECTION,
+            query=source_vector,
+            limit=limit * 4,    # fetch extra to allow dedup and exclusion
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        # Step 3: deduplicate by filename, exclude the source document
+        seen = {}
+        for hit in response.points:
+            p  = dict(hit.payload or {})
+            fn = p.get("filename", "")
+            if fn and fn != filename and fn not in seen:
+                seen[fn] = (float(hit.score), p)
+
+        # Sort by score, take top limit
+        ranked = sorted(seen.values(), key=lambda x: x[0], reverse=True)[:limit]
+
+        results = []
+        for score, doc in ranked:
+            results.append({
+                "title":    doc.get("title") or doc.get("filename") or "Unknown",
+                "authors":  doc.get("authors") or "",
+                "year":     doc.get("year") or "",
+                "category": doc.get("category") or "",
+                "filename": doc.get("filename") or "",
+                "excerpt":  (doc.get("text") or "")[:200],
+                "pdf_url":  pdf_url_for_filename(doc.get("filename") or ""),
+                "score":    round(score, 3),
+            })
+
+        return jsonify({"ok": True, "source_title": title, "documents": results})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/discover", methods=["POST"])
 def discover_route():
     """
