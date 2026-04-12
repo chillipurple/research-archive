@@ -1038,30 +1038,39 @@ function _renderResult(answer, citations, contradictions) {
 
     const meta = document.createElement('div');
     meta.className = 'citation-meta';
-    const spAuthors = document.createElement('span');
-    spAuthors.textContent = c.authors != null ? String(c.authors) : '';
-    const spDot = document.createElement('span');
-    spDot.textContent = '\u00b7';
-    const spYear = document.createElement('span');
-    spYear.textContent = c.year != null ? String(c.year) : '';
 
+    // Build meta parts - only include non-empty values, join with · separator
+    const metaParts = [];
+    const authors = c.authors && String(c.authors).trim();
+    const year    = c.year    && String(c.year).trim();
     const pageRef = (c.page_start && c.page_end)
       ? 'pp. ' + String(c.page_start) + '\u2013' + String(c.page_end)
       : (c.page_start ? 'p. ' + String(c.page_start) : '');
+    const cat = c.category && String(c.category).trim();
 
-    const spCat = document.createElement('span');
-    spCat.className = 'citation-category';
-    spCat.textContent = c.category != null ? String(c.category) : '';
+    if (authors) metaParts.push({ text: authors, cls: null });
+    if (year)    metaParts.push({ text: year,    cls: null });
+    if (pageRef) metaParts.push({ text: pageRef, cls: 'citation-pages' });
 
-    const metaChildren = [spAuthors, spDot, spYear];
-    if (pageRef) {
-      const spPage = document.createElement('span');
-      spPage.className = 'citation-pages';
-      spPage.textContent = pageRef;
-      metaChildren.push(document.createTextNode('\u00b7'), spPage);
+    metaParts.forEach((part, i) => {
+      if (i > 0) {
+        const dot = document.createElement('span');
+        dot.textContent = ' \u00b7 ';
+        meta.appendChild(dot);
+      }
+      const sp = document.createElement('span');
+      if (part.cls) sp.className = part.cls;
+      sp.textContent = part.text;
+      meta.appendChild(sp);
+    });
+
+    if (cat) {
+      const spCat = document.createElement('span');
+      spCat.className = 'citation-category';
+      spCat.textContent = cat;
+      meta.appendChild(spCat);
     }
-    metaChildren.push(spCat);
-    meta.append(...metaChildren);
+
     body.appendChild(meta);
 
     const excerptText = c.excerpt != null ? String(c.excerpt).trim() : '';
@@ -1128,11 +1137,18 @@ function _renderResult(answer, citations, contradictions) {
 
 // ── Export ────────────────────────────────────────────────────────────────────
 
+let _exporting = false;
+
 async function doExport(fmt) {
-  if (!_lastResult) return;
-  const btn = document.getElementById(fmt === 'pdf' ? 'exportPdf' : 'exportDocx');
-  btn.disabled = true;
-  btn.textContent = fmt === 'pdf' ? 'Generating PDF...' : 'Generating Word...';
+  if (!_lastResult || _exporting) return;
+  _exporting = true;
+
+  const pdfBtn  = document.getElementById('exportPdf');
+  const docxBtn = document.getElementById('exportDocx');
+  pdfBtn.disabled  = true;
+  docxBtn.disabled = true;
+  const activeBtn  = fmt === 'pdf' ? pdfBtn : docxBtn;
+  activeBtn.textContent = fmt === 'pdf' ? 'Generating...' : 'Generating...';
 
   try {
     const res = await fetch('/export', {
@@ -1147,7 +1163,7 @@ async function doExport(fmt) {
       })
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       alert('Export failed: ' + (err.error || res.status));
       return;
     }
@@ -1160,10 +1176,13 @@ async function doExport(fmt) {
     URL.revokeObjectURL(url);
   } catch(e) {
     alert('Export failed: ' + e.message);
+  } finally {
+    _exporting = false;
+    pdfBtn.disabled  = false;
+    docxBtn.disabled = false;
+    pdfBtn.textContent  = 'PDF';
+    docxBtn.textContent = 'Word';
   }
-
-  btn.disabled = false;
-  btn.textContent = fmt === 'pdf' ? 'PDF' : 'Word';
 }
 
 document.getElementById('query').addEventListener('keydown', e => {
