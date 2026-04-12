@@ -29,19 +29,15 @@ from qdrant_client.http import models as qm
 BASE_DIR = Path(__file__).resolve().parent
 LOGO_PATH = Path(os.environ.get("HEP_LOGO_PATH", str(BASE_DIR / "HEP logo white.png")))
 
-# Local (Mac) research folder configuration (only required when rebuilding index).
 RESEARCH_DIR_ENV = os.environ.get("HEP_RESEARCH_DIR")
 RESEARCH_DIR = Path(RESEARCH_DIR_ENV) if RESEARCH_DIR_ENV else None
 OUTPUT_CSV = (RESEARCH_DIR / "_research_index.csv") if RESEARCH_DIR else None
 
-# Cloud/runtime index configuration (recommended for deployment).
 INDEX_URL = os.environ.get("HEP_INDEX_URL", "").strip() or None
 INDEX_FILE = Path(os.environ.get("HEP_INDEX_FILE", str(BASE_DIR / "data" / "_vector_index.pkl"))).resolve()
 
-# Semantic search (Qdrant + Voyage)
 
 def _clean_env_str(val: str | None) -> str:
-    """Match pdf_ingest: strip BOM and surrounding quotes (Railway / pasted secrets)."""
     if val is None:
         return ""
     s = str(val).strip()
@@ -52,12 +48,15 @@ def _clean_env_str(val: str | None) -> str:
     return s
 
 
-VOYAGE_API_KEY = _clean_env_str(os.environ.get("VOYAGE_API_KEY"))
-VOYAGE_MODEL = os.environ.get("VOYAGE_MODEL", "voyage-3").strip() or "voyage-3"
-VOYAGE_RERANK_MODEL = os.environ.get("VOYAGE_RERANK_MODEL", "rerank-2").strip() or "rerank-2"
-RERANK_ENABLED = os.environ.get("RERANK_ENABLED", "true").strip().lower() not in ("0", "false", "no")
-HYBRID_TOP_K = int(os.environ.get("HYBRID_TOP_K", "20"))   # candidates fetched before rerank
-FINAL_TOP_K  = int(os.environ.get("FINAL_TOP_K",  "8"))    # results returned to Claude
+VOYAGE_API_KEY       = _clean_env_str(os.environ.get("VOYAGE_API_KEY"))
+VOYAGE_MODEL         = os.environ.get("VOYAGE_MODEL", "voyage-3").strip() or "voyage-3"
+VOYAGE_RERANK_MODEL  = os.environ.get("VOYAGE_RERANK_MODEL", "rerank-2").strip() or "rerank-2"
+RERANK_ENABLED       = os.environ.get("RERANK_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+HYBRID_TOP_K         = int(os.environ.get("HYBRID_TOP_K", "20"))
+FINAL_TOP_K          = int(os.environ.get("FINAL_TOP_K",  "8"))
+
+# Phase 3 flags
+CONTRADICTION_ENABLED = os.environ.get("CONTRADICTION_ENABLED", "true").strip().lower() not in ("0", "false", "no")
 
 QDRANT_URL = _clean_env_str(os.environ.get("QDRANT_URL"))
 
@@ -74,17 +73,16 @@ def _read_qdrant_api_key() -> str:
     return key
 
 
-QDRANT_API_KEY = _read_qdrant_api_key()
+QDRANT_API_KEY    = _read_qdrant_api_key()
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "hep_research").strip() or "hep_research"
 
-# Public PDFs on Cloudflare R2: {HEP_PDF_BASE_URL}/{filename}
 HEP_PDF_BASE_URL = os.environ.get(
     "HEP_PDF_BASE_URL",
     "https://pub-40a226eaa06b4f59988b1d1213d57d9c.r2.dev/pdfs",
 ).strip().rstrip("/")
 
 client = anthropic.Anthropic()
-app = Flask(__name__)
+app    = Flask(__name__)
 
 _max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 app.config["MAX_CONTENT_LENGTH"] = _max_upload_mb * 1024 * 1024
@@ -97,14 +95,12 @@ except ImportError:
     def upload_config_detail() -> dict:
         return {
             "ok": False,
-            "checks": [
-                {
-                    "id": "pdf_ingest_import",
-                    "name": "pdf_ingest module",
-                    "ok": False,
-                    "detail": "not importable (install boto3, google-api-python-client, etc.)",
-                }
-            ],
+            "checks": [{
+                "id": "pdf_ingest_import",
+                "name": "pdf_ingest module",
+                "ok": False,
+                "detail": "not importable",
+            }],
         }
 
     def upload_config_ok() -> bool:
@@ -114,7 +110,7 @@ except ImportError:
 
 AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "").strip()
 AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "").strip()
-AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
+AUTH_ENABLED  = bool(AUTH_USERNAME and AUTH_PASSWORD)
 
 
 def _unauthorized() -> Response:
@@ -188,7 +184,8 @@ def embed(text: str, vocab: dict) -> np.ndarray:
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b))
 
-_voy = None
+
+_voy    = None
 _qdrant = None
 
 
@@ -211,7 +208,7 @@ def get_qdrant_client() -> QdrantClient:
 
 
 def embed_query(text: str) -> list:
-    voy = get_voyage_client()
+    voy  = get_voyage_client()
     resp = voy.embed(texts=[text], model=VOYAGE_MODEL)
     return resp.embeddings[0]
 
@@ -274,7 +271,7 @@ def build_index() -> dict:
         try:
             return _load_index_from_disk()
         except Exception as e:
-            print(f"Failed to load index from disk ({INDEX_FILE}): {e}")
+            print(f"Failed to load index ({INDEX_FILE}): {e}")
             try:
                 INDEX_FILE.unlink()
             except Exception:
@@ -286,15 +283,11 @@ def build_index() -> dict:
             raise
 
     if RESEARCH_DIR is None or OUTPUT_CSV is None:
-        raise RuntimeError(
-            "Cannot build index: HEP_RESEARCH_DIR is not set. "
-            "For cloud deployment, set HEP_INDEX_URL instead."
-        )
+        raise RuntimeError("Cannot build index: HEP_RESEARCH_DIR is not set.")
     if not OUTPUT_CSV.exists():
         raise FileNotFoundError(f"Missing metadata CSV at '{OUTPUT_CSV}'.")
 
-    print("Building index from scratch - this will take several minutes...")
-
+    print("Building index from scratch...")
     metadata = {}
     with open(OUTPUT_CSV, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -303,35 +296,21 @@ def build_index() -> dict:
                 metadata[row["renamed_filename"]] = row
 
     documents = []
-    all_pdfs = sorted(RESEARCH_DIR.glob("*.pdf"))
-    print(f"Processing {len(all_pdfs)} PDFs...")
-
+    all_pdfs  = sorted(RESEARCH_DIR.glob("*.pdf"))
     for i, pdf_path in enumerate(all_pdfs, 1):
         filename = pdf_path.name
-        meta = metadata.get(filename, {})
-        text = extract_text(pdf_path)
+        meta     = metadata.get(filename, {})
+        text     = extract_text(pdf_path)
         combined = " ".join(filter(None, [
-            meta.get("full_title", ""),
-            meta.get("authors", ""),
-            meta.get("keywords", ""),
-            meta.get("abstract_summary", ""),
-            text
+            meta.get("full_title", ""), meta.get("authors", ""),
+            meta.get("keywords", ""), meta.get("abstract_summary", ""), text
         ]))
-        documents.append({
-            "filename": filename,
-            "path": str(pdf_path),
-            "text": text,
-            "combined": combined,
-            "meta": meta,
-            "embedding": None
-        })
+        documents.append({"filename": filename, "path": str(pdf_path),
+                          "text": text, "combined": combined, "meta": meta, "embedding": None})
         if i % 50 == 0:
             print(f"  Processed {i}/{len(all_pdfs)}...")
 
-    print("Building vocabulary...")
     vocab = build_vocab(documents)
-
-    print("Computing embeddings...")
     for i, doc in enumerate(documents, 1):
         doc["embedding"] = embed(doc["combined"], vocab)
         if i % 50 == 0:
@@ -340,48 +319,22 @@ def build_index() -> dict:
     index = {"documents": documents, "vocab": vocab}
     with open(INDEX_FILE, "wb") as f:
         pickle.dump(index, f)
-
-    print(f"Index built and saved. {len(documents)} documents indexed.")
     return index
 
 
-# ── Search ────────────────────────────────────────────────────────────────────
-
-def search(query: str, index: dict, category: str = "All", top_k: int = 8) -> list:
-    vocab     = index["vocab"]
-    documents = index["documents"]
-    query_vec = embed(query, vocab)
-
-    results = []
-    for doc in documents:
-        if category and category != "All":
-            if doc["meta"].get("category", "") != category:
-                continue
-        score = cosine_similarity(query_vec, doc["embedding"])
-        results.append((score, doc))
-
-    results.sort(key=lambda x: x[0], reverse=True)
-    return results[:top_k]
-
-
-# ── Keyword helpers ───────────────────────────────────────────────────────────
+# ── Keyword / BM25 Helpers ────────────────────────────────────────────────────
 
 def _tokenise_query(text: str) -> list[str]:
-    """Simple tokeniser for BM25 keyword matching."""
     return re.findall(r"[a-z]{3,}", text.lower())
 
 
 def _scroll_by_category(qdrant: QdrantClient, category: str, limit: int = 2000) -> list:
-    """
-    Fetch payloads via Qdrant scroll for in-process BM25 search.
-    Fetches all chunks for the given category (or all categories).
-    """
     filt = None
     if category and category != "All":
         filt = qm.Filter(
             must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
         )
-    records, _next = qdrant.scroll(
+    records, _ = qdrant.scroll(
         collection_name=QDRANT_COLLECTION,
         scroll_filter=filt,
         limit=limit,
@@ -392,45 +345,37 @@ def _scroll_by_category(qdrant: QdrantClient, category: str, limit: int = 2000) 
 
 
 def _bm25_search(query: str, records: list, top_k: int) -> list[tuple[float, dict]]:
-    """
-    BM25 over a list of Qdrant scroll records.
-    Returns (score, payload) pairs sorted descending.
-    """
     from math import log
-
     tokens = _tokenise_query(query)
     if not tokens or not records:
         return []
 
     corpus: list[list[str]] = []
     for r in records:
-        payload = dict(r.payload or {})
-        text = " ".join(filter(None, [
-            payload.get("title", ""),
-            payload.get("text", ""),
-            payload.get("authors", ""),
-        ]))
+        p    = dict(r.payload or {})
+        text = " ".join(filter(None, [p.get("title", ""), p.get("text", ""), p.get("authors", "")]))
         corpus.append(_tokenise_query(text))
 
-    N = len(corpus)
+    N     = len(corpus)
     k1, b = 1.5, 0.75
     avgdl = sum(len(d) for d in corpus) / N if N else 1
 
     idf: dict[str, float] = {}
     for t in set(tokens):
-        df = sum(1 for d in corpus if t in d)
-        idf[t] = log((N - df + 0.5) / (df + 0.5) + 1)
+        df      = sum(1 for d in corpus if t in d)
+        idf[t]  = log((N - df + 0.5) / (df + 0.5) + 1)
 
     scores: list[float] = []
     for doc in corpus:
-        dl = len(doc)
-        freq: dict[str, int] = {}
+        dl   = len(doc)
+        freq = {}
         for w in doc:
             freq[w] = freq.get(w, 0) + 1
-        s = 0.0
-        for t in tokens:
-            f = freq.get(t, 0)
-            s += idf.get(t, 0) * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+        s = sum(
+            idf.get(t, 0) * (freq.get(t, 0) * (k1 + 1))
+            / (freq.get(t, 0) + k1 * (1 - b + b * dl / avgdl))
+            for t in tokens
+        )
         scores.append(s)
 
     ranked = sorted(zip(scores, records), key=lambda x: x[0], reverse=True)[:top_k]
@@ -438,131 +383,209 @@ def _bm25_search(query: str, records: list, top_k: int) -> list[tuple[float, dic
 
 
 def _rrf_merge(
-    vector_hits: list[tuple[float, dict]],
+    vector_hits:  list[tuple[float, dict]],
     keyword_hits: list[tuple[float, dict]],
     k: int = 60,
     top_n: int = 20,
 ) -> list[tuple[float, dict]]:
-    """
-    Reciprocal Rank Fusion: merges two ranked lists into one.
-    Deduplicates by (filename, chunk_index).
-    """
-    def _key(payload: dict) -> tuple:
-        return (payload.get("filename", ""), payload.get("chunk_index", -1))
+    def _key(p: dict) -> tuple:
+        return (p.get("filename", ""), p.get("chunk_index", -1))
 
-    rrf_scores: dict[tuple, float] = {}
-    payloads: dict[tuple, dict] = {}
+    rrf: dict[tuple, float] = {}
+    pays: dict[tuple, dict] = {}
 
-    for rank, (_, payload) in enumerate(vector_hits, start=1):
-        key = _key(payload)
-        rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (k + rank)
-        payloads[key] = payload
+    for rank, (_, p) in enumerate(vector_hits, start=1):
+        key       = _key(p)
+        rrf[key]  = rrf.get(key, 0.0) + 1.0 / (k + rank)
+        pays[key] = p
 
-    for rank, (_, payload) in enumerate(keyword_hits, start=1):
-        key = _key(payload)
-        rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (k + rank)
-        payloads[key] = payload
+    for rank, (_, p) in enumerate(keyword_hits, start=1):
+        key       = _key(p)
+        rrf[key]  = rrf.get(key, 0.0) + 1.0 / (k + rank)
+        pays[key] = p
 
-    ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
-    return [(score, payloads[key]) for key, score in ranked]
+    ranked = sorted(rrf.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    return [(score, pays[key]) for key, score in ranked]
 
 
 def _rerank(query: str, candidates: list[tuple[float, dict]], top_n: int) -> list[tuple[float, dict]]:
-    """
-    Rerank candidates using Voyage rerank-2.
-    Falls back to RRF order if reranking fails or is disabled.
-    """
     if not RERANK_ENABLED or not candidates:
         return candidates[:top_n]
     try:
-        voy = get_voyage_client()
+        voy  = get_voyage_client()
         docs = [
-            " ".join(filter(None, [
-                p.get("title", ""),
-                p.get("text", "")[:1000],
-            ]))
+            " ".join(filter(None, [p.get("title", ""), p.get("text", "")[:1000]]))
             for _, p in candidates
         ]
-        result = voy.rerank(
-            query=query,
-            documents=docs,
-            model=VOYAGE_RERANK_MODEL,
-            top_k=top_n,
-        )
-        reranked = []
-        for item in result.results:
-            score = float(item.relevance_score)
-            payload = candidates[item.index][1]
-            reranked.append((score, payload))
+        result   = voy.rerank(query=query, documents=docs, model=VOYAGE_RERANK_MODEL, top_k=top_n)
+        reranked = [(float(item.relevance_score), candidates[item.index][1]) for item in result.results]
         return reranked
     except Exception as e:
         print(f"[rerank] warning: {e} — falling back to RRF order")
         return candidates[:top_n]
 
 
-# ── Public search entry point ─────────────────────────────────────────────────
-
 def semantic_search(query: str, category: str = "All", top_k: int = 8) -> list:
-    """
-    Hybrid retrieval: vector search + BM25 keyword search merged via RRF,
-    then reranked with Voyage rerank-2.
-    Returns (score, payload_dict) pairs.
-
-    top_k is accepted for backwards compatibility but FINAL_TOP_K env var
-    controls the actual result count (default 8).
-    """
+    """Hybrid retrieval: vector + BM25 via RRF, then Voyage rerank."""
     qdrant = get_qdrant_client()
 
-    # 1. Vector search — fetch HYBRID_TOP_K candidates
-    vec = embed_query(query)
+    vec  = embed_query(query)
     filt = None
     if category and category != "All":
         filt = qm.Filter(
             must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
         )
-    response = qdrant.query_points(
+    response     = qdrant.query_points(
         collection_name=QDRANT_COLLECTION,
-        query=vec,
-        limit=HYBRID_TOP_K,
-        with_payload=True,
-        with_vectors=False,
+        query=vec, limit=HYBRID_TOP_K,
+        with_payload=True, with_vectors=False,
         query_filter=filt,
     )
-    vector_hits = [(float(h.score), dict(h.payload or {})) for h in response.points]
-
-    # 2. BM25 keyword search over scrolled corpus
-    records = _scroll_by_category(qdrant, category, limit=2000)
+    vector_hits  = [(float(h.score), dict(h.payload or {})) for h in response.points]
+    records      = _scroll_by_category(qdrant, category, limit=2000)
     keyword_hits = _bm25_search(query, records, top_k=HYBRID_TOP_K)
+    merged       = _rrf_merge(vector_hits, keyword_hits, top_n=HYBRID_TOP_K)
+    return _rerank(query, merged, top_n=FINAL_TOP_K)
 
-    # 3. RRF merge and deduplicate
-    merged = _rrf_merge(vector_hits, keyword_hits, top_n=HYBRID_TOP_K)
 
-    # 4. Voyage rerank
-    final = _rerank(query, merged, top_n=FINAL_TOP_K)
+# ── Phase 3: Evidence Strength ────────────────────────────────────────────────
 
-    return final
+def compute_evidence_strength(citations: list[dict], answer_text: str) -> dict[int, int]:
+    """
+    For each citation index, count how many *independent documents* (distinct
+    filenames) are cited alongside it in the same sentence of the answer.
+
+    Returns {citation_index: independent_source_count}.
+    The count represents how many distinct documents support the same
+    part of the answer as this citation - including itself (minimum 1).
+    """
+    # Find all [n] references per sentence
+    sentences = re.split(r'(?<=[.!?])\s+', answer_text)
+
+    # Map filename -> set of citation indices pointing to that file
+    filename_to_indices: dict[str, set[int]] = {}
+    for c in citations:
+        fn = c.get("filename", "")
+        if fn:
+            filename_to_indices.setdefault(fn, set()).add(c["index"])
+
+    # For each citation, count distinct filenames cited in same sentences
+    cooccurrence: dict[int, set[str]] = {c["index"]: set() for c in citations}
+    for sentence in sentences:
+        cited_nums = [int(m) for m in re.findall(r'\[(\d+)\]', sentence)]
+        if not cited_nums:
+            continue
+        # Collect filenames for all citations in this sentence
+        filenames_in_sentence = set()
+        for n in cited_nums:
+            matching = [c for c in citations if c["index"] == n]
+            if matching:
+                fn = matching[0].get("filename", "")
+                if fn:
+                    filenames_in_sentence.add(fn)
+        # Credit each cited index with all filenames in sentence
+        for n in cited_nums:
+            if n in cooccurrence:
+                cooccurrence[n] |= filenames_in_sentence
+
+    # Also ensure each citation counts at least its own document
+    for c in citations:
+        fn = c.get("filename", "")
+        if fn:
+            cooccurrence[c["index"]].add(fn)
+
+    return {idx: max(1, len(fns)) for idx, fns in cooccurrence.items()}
+
+
+# ── Phase 3: Contradiction Detection ─────────────────────────────────────────
+
+def detect_contradictions(query: str, results: list[tuple[float, dict]]) -> list[dict]:
+    """
+    Asks Claude to identify factual contradictions across the retrieved chunks.
+    Returns a list of contradiction objects:
+      [{ "topic": str, "sides": [{ "index": int, "claim": str }, ...] }]
+    Returns [] if none found or if disabled.
+    """
+    if not CONTRADICTION_ENABLED or len(results) < 2:
+        return []
+
+    # Build a compact source list for the contradiction prompt
+    source_lines = []
+    for i, (_, doc) in enumerate(results, 1):
+        title      = doc.get("title") or doc.get("filename") or "Unknown"
+        year       = doc.get("year") or "n.d."
+        chunk_text = (doc.get("text") or "")[:600]
+        source_lines.append(f"[{i}] {title} ({year})\n{chunk_text}")
+
+    sources_block = "\n\n".join(source_lines)
+
+    prompt = f"""You are a research analyst checking for factual contradictions across research sources.
+
+Research question: {query}
+
+Below are {len(results)} source excerpts. Identify any direct factual contradictions - where two or more sources make conflicting specific claims about the same thing (statistics, dates, named findings, causal claims).
+
+Do not flag differences in emphasis, methodology, or scope. Only flag direct factual conflicts.
+
+If you find contradictions, respond in this exact JSON format:
+{{
+  "contradictions": [
+    {{
+      "topic": "brief description of what they disagree on",
+      "sides": [
+        {{"index": 1, "claim": "what source 1 says"}},
+        {{"index": 3, "claim": "what source 3 says"}}
+      ]
+    }}
+  ]
+}}
+
+If there are no direct factual contradictions, respond with:
+{{"contradictions": []}}
+
+Sources:
+{sources_block}
+
+JSON response only:"""
+
+    try:
+        message = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = message.content[0].text.strip()
+        # Strip markdown code fences if present
+        raw = re.sub(r'^```(?:json)?\s*', '', raw)
+        raw = re.sub(r'\s*```$', '', raw)
+        import json
+        parsed = json.loads(raw)
+        return parsed.get("contradictions", [])
+    except Exception as e:
+        print(f"[contradiction] warning: {e}")
+        return []
 
 
 # ── Answer Generation ─────────────────────────────────────────────────────────
 
 def generate_answer(query: str, results: list) -> dict:
     if not results:
-        return {"answer": "No relevant documents found.", "citations": []}
+        return {"answer": "No relevant documents found.", "citations": [], "contradictions": []}
 
     context_parts = []
     citations     = []
     doc_url_template = os.environ.get("HEP_DOC_URL_TEMPLATE", "").strip()
 
     for i, (score, doc) in enumerate(results, 1):
-        title = doc.get("title") or doc.get("filename") or "Unknown title"
-        authors = doc.get("authors") or "Unknown"
-        year = doc.get("year") or "n.d."
-        filename = doc.get("filename") or ""
-        category = doc.get("category") or ""
+        title       = doc.get("title") or doc.get("filename") or "Unknown title"
+        authors     = doc.get("authors") or "Unknown"
+        year        = doc.get("year") or "n.d."
+        filename    = doc.get("filename") or ""
+        category    = doc.get("category") or ""
         chunk_index = doc.get("chunk_index")
-        page_start = doc.get("page_start")
-        page_end = doc.get("page_end")
-        chunk_text = doc.get("text") or ""
+        page_start  = doc.get("page_start")
+        page_end    = doc.get("page_end")
+        chunk_text  = doc.get("text") or ""
 
         ref_bits = []
         if page_start and page_end:
@@ -571,22 +594,21 @@ def generate_answer(query: str, results: list) -> dict:
             ref_bits.append(f"chunk {chunk_index}")
         ref = ("; " + ", ".join(ref_bits)) if ref_bits else ""
 
-        excerpt = chunk_text[:2000]
-        context_parts.append(f"[{i}] {title} ({authors}, {year}){ref}\n{excerpt}")
+        context_parts.append(f"[{i}] {title} ({authors}, {year}){ref}\n{chunk_text[:2000]}")
 
         citation = {
-            "index": i,
-            "title": title,
-            "authors": authors,
-            "year": year,
-            "filename": filename,
-            "category": category,
+            "index":           i,
+            "title":           title,
+            "authors":         authors,
+            "year":            year,
+            "filename":        filename,
+            "category":        category,
             "relevance_score": round(score, 3),
-            "page_start": page_start,
-            "page_end": page_end,
-            "chunk_index": chunk_index,
-            "pdf_url": pdf_url_for_filename(filename),
-            "excerpt": chunk_text[:300] if chunk_text else "",
+            "page_start":      page_start,
+            "page_end":        page_end,
+            "chunk_index":     chunk_index,
+            "pdf_url":         pdf_url_for_filename(filename),
+            "excerpt":         chunk_text[:300] if chunk_text else "",
         }
         if doc_url_template and "{filename}" in doc_url_template:
             citation["url"] = doc_url_template.replace("{filename}", filename)
@@ -616,16 +638,24 @@ Answer:"""
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}]
     )
+    answer_text = message.content[0].text.strip()
+
+    # Phase 3: run evidence strength and contradiction detection in parallel
+    # (contradiction detection is a second Claude call - runs after answer generation)
+    evidence_strength = compute_evidence_strength(citations, answer_text)
+    for c in citations:
+        c["evidence_strength"] = evidence_strength.get(c["index"], 1)
+
+    contradictions = detect_contradictions(query, results)
 
     return {
-        "answer":    message.content[0].text.strip(),
-        "citations": citations
+        "answer":        answer_text,
+        "citations":     citations,
+        "contradictions": contradictions,
     }
 
 
 # ── Flask Routes ──────────────────────────────────────────────────────────────
-
-_index = None
 
 def get_index():
     raise RuntimeError("Legacy TF-IDF index is disabled; semantic search uses Qdrant only.")
@@ -634,7 +664,7 @@ def get_index():
 @app.route("/")
 def home():
     doc_count = "Qdrant"
-    logo_url = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
+    logo_url  = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
     return render_template("index.html", doc_count=doc_count, logo_url=logo_url)
 
 
@@ -665,11 +695,11 @@ def search_route():
 @app.route("/health")
 def health():
     return jsonify({
-        "ok": True,
-        "qdrant_configured": bool(QDRANT_URL and QDRANT_API_KEY),
-        "qdrant_lazy_connect": True,
-        "hybrid_retrieval": True,
-        "rerank_enabled": RERANK_ENABLED,
+        "ok":                   True,
+        "qdrant_configured":    bool(QDRANT_URL and QDRANT_API_KEY),
+        "hybrid_retrieval":     True,
+        "rerank_enabled":       RERANK_ENABLED,
+        "contradiction_enabled": CONTRADICTION_ENABLED,
     }), 200
 
 
@@ -680,7 +710,7 @@ def rebuild():
 
 @app.route("/admin")
 def admin_page():
-    logo_url = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
+    logo_url  = os.environ.get("HEP_LOGO_URL", "").strip() or "/logo"
     ingest_ok = ingest_pdf is not None
     return render_template(
         "admin.html",
@@ -694,7 +724,7 @@ def admin_page():
 @app.route("/admin/api/status")
 def admin_status():
     try:
-        qc = get_qdrant_client()
+        qc  = get_qdrant_client()
         cnt = qc.count(collection_name=QDRANT_COLLECTION, exact=True).count
         return jsonify({"ok": True, "total_chunks": cnt})
     except Exception as e:
@@ -702,31 +732,20 @@ def admin_status():
 
 
 _ADMIN_DEBUG_ENV_KEYS = (
-    "QDRANT_URL",
-    "QDRANT_API_KEY",
-    "HEP_QDRANT_API_KEY",
-    "VOYAGE_API_KEY",
-    "R2_ACCESS_KEY_ID",
-    "R2_SECRET_ACCESS_KEY",
-    "R2_BUCKET_NAME",
-    "R2_ENDPOINT_URL",
-    "GOOGLE_SERVICE_ACCOUNT_URL",
-    "GOOGLE_SERVICE_ACCOUNT_JSON",
-    "GOOGLE_DRIVE_FOLDER_ID",
+    "QDRANT_URL", "QDRANT_API_KEY", "HEP_QDRANT_API_KEY", "VOYAGE_API_KEY",
+    "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_ENDPOINT_URL",
+    "GOOGLE_SERVICE_ACCOUNT_URL", "GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_DRIVE_FOLDER_ID",
 )
 
 
 @app.route("/admin/api/debug")
 def admin_debug():
-    return jsonify(
-        {k: bool(_clean_env_str(os.environ.get(k))) for k in _ADMIN_DEBUG_ENV_KEYS}
-    )
+    return jsonify({k: bool(_clean_env_str(os.environ.get(k))) for k in _ADMIN_DEBUG_ENV_KEYS})
 
 
 @app.route("/admin/api/upload-debug")
 def admin_upload_debug():
-    detail = upload_config_detail()
-    return jsonify(detail)
+    return jsonify(upload_config_detail())
 
 
 @app.route("/admin/api/upload", methods=["POST"])
@@ -734,16 +753,8 @@ def admin_upload():
     if ingest_pdf is None:
         return jsonify({"ok": False, "error": "pdf_ingest module not available", "steps": []}), 500
     if not upload_config_ok():
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": "Missing R2 or Google Drive environment variables",
-                    "steps": [],
-                }
-            ),
-            400,
-        )
+        return jsonify({"ok": False, "error": "Missing R2 or Google Drive environment variables", "steps": []}), 400
+
     f = request.files.get("file")
     if not f or not f.filename:
         return jsonify({"ok": False, "error": "No file provided", "steps": []}), 400
@@ -751,21 +762,19 @@ def admin_upload():
     if not filename.lower().endswith(".pdf"):
         return jsonify({"ok": False, "error": "Only PDF files are allowed", "steps": []}), 400
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    tmp     = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     tmp_path = Path(tmp.name)
     try:
         tmp.close()
         f.save(tmp_path)
         result = ingest_pdf(tmp_path, filename)
-        code = 200 if result.get("ok") else 500
-        return jsonify(
-            {
-                "ok": bool(result.get("ok")),
-                "steps": result.get("steps", []),
-                "error": result.get("error"),
-                "chunks_upserted": result.get("chunks_upserted", 0),
-            }
-        ), code
+        code   = 200 if result.get("ok") else 500
+        return jsonify({
+            "ok":              bool(result.get("ok")),
+            "steps":           result.get("steps", []),
+            "error":           result.get("error"),
+            "chunks_upserted": result.get("chunks_upserted", 0),
+        }), code
     finally:
         try:
             tmp_path.unlink(missing_ok=True)
@@ -778,8 +787,5 @@ def admin_upload():
 if __name__ == "__main__":
     print("HEP Research Library")
     print("=" * 50)
-    print("Starting API server...")
-    print("Open http://localhost:5000 when ready.")
-    print()
     port = int(os.environ.get("PORT", "5000"))
     app.run(debug=False, host="0.0.0.0", port=port)

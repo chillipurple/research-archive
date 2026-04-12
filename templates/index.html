@@ -311,6 +311,93 @@ select:focus { outline: none; border-color: var(--mid-purple); }
   padding-left: 10px;
   font-style: italic;
 }
+
+/* Evidence strength badge */
+.evidence-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-family: 'Oswald', sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 3px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.evidence-badge.strong {
+  background: rgba(255,192,92,0.15);
+  border: 1px solid rgba(255,192,92,0.5);
+  color: var(--gold);
+}
+.evidence-badge.moderate {
+  background: rgba(139,56,141,0.15);
+  border: 1px solid var(--border);
+  color: var(--light-purple);
+}
+.evidence-badge.single {
+  background: rgba(154,133,160,0.1);
+  border: 1px solid rgba(154,133,160,0.25);
+  color: var(--text-muted);
+}
+
+/* Contradiction panel */
+.contradictions-panel {
+  margin-top: 24px;
+  padding: 18px 20px;
+  background: rgba(200,120,50,0.08);
+  border: 1px solid rgba(200,120,50,0.35);
+  border-radius: 8px;
+}
+.contradictions-heading {
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: #e8a060;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.contradictions-heading::before {
+  content: "⚠";
+  font-size: 0.85rem;
+}
+.contradiction-item {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(200,120,50,0.2);
+}
+.contradiction-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.contradiction-topic {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e8a060;
+  margin-bottom: 8px;
+}
+.contradiction-sides {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.contradiction-side {
+  font-size: 0.8rem;
+  color: var(--off-white);
+  line-height: 1.5;
+  padding-left: 12px;
+  border-left: 2px solid rgba(200,120,50,0.4);
+}
+.contradiction-side-num {
+  color: var(--gold);
+  font-weight: 600;
+  margin-right: 4px;
+}
 </style>
 </head>
 <body>
@@ -360,6 +447,7 @@ select:focus { outline: none; border-color: var(--mid-purple); }
       <div class="citations-heading">Sources</div>
       <div id="citationList"></div>
     </div>
+    <div id="contradictionsPanel" style="display:none"></div>
     <div class="stats" id="stats"></div>
   </div>
 
@@ -511,6 +599,15 @@ async function doSearch() {
           titleRow.appendChild(document.createTextNode(c.title != null ? String(c.title) : ''));
         }
 
+        // Evidence strength badge
+        const strength = c.evidence_strength || 1;
+        const badge = document.createElement('span');
+        badge.className = 'evidence-badge ' + (strength >= 3 ? 'strong' : strength === 2 ? 'moderate' : 'single');
+        badge.textContent = strength >= 3
+          ? strength + ' sources'
+          : strength === 2 ? '2 sources' : '1 source';
+        titleRow.appendChild(badge);
+
         body.appendChild(titleRow);
 
         const pdfUrl = c.pdf_url != null ? String(c.pdf_url).trim() : '';
@@ -573,6 +670,46 @@ async function doSearch() {
 
       document.getElementById('stats').textContent =
         String(data.citations.length) + ' sources reviewed';
+
+      // Contradiction panel
+      const contraPanel = document.getElementById('contradictionsPanel');
+      const contras = data.contradictions || [];
+      if (contras.length > 0) {
+        const panel = document.createElement('div');
+        panel.className = 'contradictions-panel';
+        const heading = document.createElement('div');
+        heading.className = 'contradictions-heading';
+        heading.textContent = 'Conflicting evidence detected';
+        panel.appendChild(heading);
+        contras.forEach(contra => {
+          const item = document.createElement('div');
+          item.className = 'contradiction-item';
+          const topic = document.createElement('div');
+          topic.className = 'contradiction-topic';
+          topic.textContent = contra.topic || '';
+          item.appendChild(topic);
+          const sides = document.createElement('div');
+          sides.className = 'contradiction-sides';
+          (contra.sides || []).forEach(side => {
+            const sideEl = document.createElement('div');
+            sideEl.className = 'contradiction-side';
+            const num = document.createElement('span');
+            num.className = 'contradiction-side-num';
+            num.textContent = '[' + String(side.index) + ']';
+            sideEl.appendChild(num);
+            sideEl.appendChild(document.createTextNode(side.claim || ''));
+            sides.appendChild(sideEl);
+          });
+          item.appendChild(sides);
+          panel.appendChild(item);
+        });
+        contraPanel.innerHTML = '';
+        contraPanel.appendChild(panel);
+        contraPanel.style.display = 'block';
+      } else {
+        contraPanel.style.display = 'none';
+        contraPanel.innerHTML = '';
+      }
       resultBox.style.display = 'block';
       resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
