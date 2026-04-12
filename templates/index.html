@@ -265,11 +265,14 @@ select:focus { outline: none; border-color: var(--mid-purple); }
   margin-top: 8px;
   font-style: italic;
 }
+
+.loading {
   display: none;
   color: var(--text-muted);
   font-size: 0.85rem;
   font-style: italic;
   padding: 10px 0 0;
+  margin-top: 4px;
   align-items: center;
   gap: 10px;
 }
@@ -610,7 +613,7 @@ select:focus { outline: none; border-color: var(--mid-purple); }
   <img src="{{ logo_url }}" alt="Hope Education Project" class="header-logo">
   <div style="display:flex;align-items:center;gap:12px;">
     <div class="doc-count" id="corpusStats">Loading corpus...</div>
-    <button class="discover-toggle" id="discoverToggle" onclick="toggleDiscover()">Browse Library</button>
+    <button class="discover-toggle" id="discoverToggle" onclick="toggleDiscover()">Browse library</button>
   </div>
 </header>
 
@@ -654,7 +657,7 @@ select:focus { outline: none; border-color: var(--mid-purple); }
     </div>
     <div class="controls-hint">Select a category to restrict search to that topic area only. Leave on All categories for the full corpus.</div>
     <div class="loading" id="loading" role="status" aria-live="polite">
-      <div>Searching {{ doc_count }} documents and generating answer...</div>
+      <div>Searching the library and generating answer...</div>
     </div>
   </div>
 
