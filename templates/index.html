@@ -43,6 +43,127 @@ header {
   letter-spacing: 0.05em;
 }
 
+.discover-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--light-purple);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 14px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.discover-toggle:hover, .discover-toggle.active {
+  border-color: var(--mid-purple);
+  color: var(--off-white);
+}
+
+/* Discovery panel */
+.discover-panel {
+  background: #1c0a22;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px 28px;
+  margin-bottom: 28px;
+  display: none;
+}
+
+.discover-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.cat-btn {
+  background: rgba(139,56,141,0.12);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--light-purple);
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 0.8rem;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.cat-btn:hover, .cat-btn.active {
+  background: rgba(139,56,141,0.3);
+  border-color: var(--mid-purple);
+  color: var(--off-white);
+}
+
+.discover-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.discover-card {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.discover-card:hover { border-color: var(--mid-purple); }
+
+.discover-card-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--off-white);
+  line-height: 1.35;
+  margin-bottom: 4px;
+}
+
+.discover-card-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.discover-card-excerpt {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  font-style: italic;
+}
+
+.discover-card-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.discover-pdf-link {
+  color: var(--gold);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.discover-pdf-link:hover { text-decoration: underline; }
+
+.discover-search-link {
+  font-size: 0.75rem;
+  color: var(--light-purple);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.discover-search-link:hover { color: var(--off-white); }
+
+.discover-loading {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  padding: 8px 0;
+}
+
 .container { max-width: 860px; margin: 0 auto; padding: 48px 20px; }
 
 .accent-bar {
@@ -482,12 +603,22 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 
 <header>
   <img src="{{ logo_url }}" alt="Hope Education Project" class="header-logo">
-  <div class="doc-count">{{ doc_count }} documents indexed</div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div class="doc-count" id="corpusStats">Loading corpus...</div>
+    <button class="discover-toggle" id="discoverToggle" onclick="toggleDiscover()">Browse Library</button>
+  </div>
 </header>
 
 <div class="container">
 
   <div class="accent-bar"></div>
+
+  <!-- Discovery mode panel -->
+  <div class="discover-panel" id="discoverPanel">
+    <div class="panel-label" style="margin-bottom:14px;">Browse by Category</div>
+    <div class="discover-cats" id="discoverCats"></div>
+    <div id="discoverResults"></div>
+  </div>
 
   <div class="history-panel" id="historyPanel">
     <div class="history-heading">Recent searches</div>
@@ -673,7 +804,146 @@ async function doSearch() {
   loading.style.display = 'none';
 }
 
-// ── Session search history ────────────────────────────────────────────────────
+// ── Corpus statistics ─────────────────────────────────────────────────────────
+
+async function loadCorpusStats() {
+  try {
+    const res  = await fetch('/stats');
+    const data = await res.json();
+    const el   = document.getElementById('corpusStats');
+    if (data.ok && data.chunks) {
+      el.textContent = data.chunks.toLocaleString() + ' chunks indexed';
+    } else {
+      el.textContent = 'Research Library';
+    }
+  } catch(e) {
+    document.getElementById('corpusStats').textContent = 'Research Library';
+  }
+}
+
+// ── Discovery mode ────────────────────────────────────────────────────────────
+
+const CATEGORIES = [
+  'Ghana', 'Nigeria', 'West Africa Regional', 'Gulf and Middle East',
+  'Child Trafficking and Exploitation', 'Sex Trafficking and Sex Work',
+  'Education and Prevention', 'Survivor Experience and Response',
+  'Digital Threats and Scamming', 'Legal and Policy Frameworks',
+  'UN and International Bodies', 'Research and Data', 'Tamale and Northern Ghana'
+];
+
+let _discoverOpen    = false;
+let _discoverCat     = null;
+
+function toggleDiscover() {
+  _discoverOpen = !_discoverOpen;
+  const panel  = document.getElementById('discoverPanel');
+  const toggle = document.getElementById('discoverToggle');
+  panel.style.display  = _discoverOpen ? 'block' : 'none';
+  toggle.classList.toggle('active', _discoverOpen);
+
+  if (_discoverOpen && !document.getElementById('discoverCats').children.length) {
+    _buildCatButtons();
+  }
+}
+
+function _buildCatButtons() {
+  const container = document.getElementById('discoverCats');
+  CATEGORIES.forEach(cat => {
+    const btn = document.createElement('button');
+    btn.className   = 'cat-btn';
+    btn.textContent = cat;
+    btn.onclick     = () => _loadCategory(cat, btn);
+    container.appendChild(btn);
+  });
+}
+
+async function _loadCategory(cat, btnEl) {
+  // Toggle active state
+  document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+  if (_discoverCat === cat) {
+    _discoverCat = null;
+    document.getElementById('discoverResults').innerHTML = '';
+    return;
+  }
+  _discoverCat = cat;
+  btnEl.classList.add('active');
+
+  const results = document.getElementById('discoverResults');
+  results.innerHTML = '<div class="discover-loading">Loading...</div>';
+
+  try {
+    const res  = await fetch('/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: cat, limit: 12 })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+
+    results.innerHTML = '';
+    if (!data.documents.length) {
+      results.innerHTML = '<div class="discover-loading">No documents found in this category.</div>';
+      return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'discover-results';
+
+    data.documents.forEach(doc => {
+      const card = document.createElement('div');
+      card.className = 'discover-card';
+
+      const title = document.createElement('div');
+      title.className   = 'discover-card-title';
+      title.textContent = doc.title || 'Unknown';
+
+      const meta = document.createElement('div');
+      meta.className = 'discover-card-meta';
+      const metaParts = [doc.authors, doc.year].filter(Boolean);
+      meta.textContent = metaParts.join(' · ');
+
+      const excerpt = document.createElement('div');
+      excerpt.className   = 'discover-card-excerpt';
+      excerpt.textContent = doc.excerpt
+        ? (doc.excerpt.length > 180 ? doc.excerpt.slice(0, 180) + '…' : doc.excerpt)
+        : '';
+
+      const actions = document.createElement('div');
+      actions.className = 'discover-card-actions';
+
+      if (doc.pdf_url) {
+        const pdfLink = document.createElement('a');
+        pdfLink.className  = 'discover-pdf-link';
+        pdfLink.href       = doc.pdf_url;
+        pdfLink.target     = '_blank';
+        pdfLink.rel        = 'noopener noreferrer';
+        pdfLink.textContent = 'View PDF';
+        actions.appendChild(pdfLink);
+      }
+
+      // "Find more like this" - seeds the search box
+      const moreLink = document.createElement('span');
+      moreLink.className   = 'discover-search-link';
+      moreLink.textContent = 'Find more like this';
+      moreLink.onclick     = () => {
+        document.getElementById('query').value = doc.title;
+        document.getElementById('category').value = doc.category || 'All';
+        toggleDiscover();
+        doSearch();
+      };
+      actions.appendChild(moreLink);
+
+      card.append(title, meta, excerpt, actions);
+      grid.appendChild(card);
+    });
+
+    results.appendChild(grid);
+  } catch(e) {
+    results.innerHTML = '<div class="discover-loading">Failed to load: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+// ── Session search history ─────────────────────────────────────────────────────
 
 const _history = [];   // { query, answer, citations, contradictions }
 
@@ -899,6 +1169,9 @@ async function doExport(fmt) {
 document.getElementById('query').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.metaKey) doSearch();
 });
+
+// Load corpus stats on page load
+loadCorpusStats();
 </script>
 </body>
 </html>

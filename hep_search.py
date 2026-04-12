@@ -700,6 +700,72 @@ def search_route():
         return jsonify({"error": str(e)})
 
 
+@app.route("/discover", methods=["POST"])
+def discover_route():
+    """
+    Discovery mode: return a sample of documents for a category
+    without a search query. Uses Qdrant scroll, deduplicates by filename,
+    returns one representative chunk per document.
+    """
+    data     = request.get_json()
+    category = data.get("category", "All")
+    limit    = int(data.get("limit", 12))
+
+    try:
+        qdrant = get_qdrant_client()
+        filt   = None
+        if category and category != "All":
+            filt = qm.Filter(
+                must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
+            )
+        records, _ = qdrant.scroll(
+            collection_name=QDRANT_COLLECTION,
+            scroll_filter=filt,
+            limit=500,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        # One chunk per document (first chunk encountered)
+        seen  = {}
+        for r in records:
+            p  = dict(r.payload or {})
+            fn = p.get("filename", "")
+            if fn and fn not in seen:
+                seen[fn] = p
+
+        # Sort by title, return up to limit
+        docs = sorted(seen.values(), key=lambda x: (x.get("title") or x.get("filename") or "").lower())
+        docs = docs[:limit]
+
+        results = []
+        for doc in docs:
+            results.append({
+                "title":    doc.get("title") or doc.get("filename") or "Unknown",
+                "authors":  doc.get("authors") or "",
+                "year":     doc.get("year") or "",
+                "category": doc.get("category") or "",
+                "filename": doc.get("filename") or "",
+                "excerpt":  (doc.get("text") or "")[:200],
+                "pdf_url":  pdf_url_for_filename(doc.get("filename") or ""),
+            })
+
+        return jsonify({"ok": True, "category": category, "documents": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/stats")
+def stats_route():
+    """Public-facing corpus statistics for the main UI."""
+    try:
+        qc      = get_qdrant_client()
+        chunks  = qc.count(collection_name=QDRANT_COLLECTION, exact=True).count
+        return jsonify({"ok": True, "chunks": chunks})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "chunks": None})
+
+
 @app.route("/export", methods=["POST"])
 def export_route():
     if not EXPORT_AVAILABLE:
