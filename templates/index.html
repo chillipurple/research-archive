@@ -283,7 +283,85 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 
 .stats { font-size: 0.75rem; color: #5a3d5f; text-align: right; margin-top: 16px; font-style: italic; }
 
-/* Markdown heading styles inside answers */
+/* Export buttons */
+.export-bar {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.export-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: 'Oswald', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-right: 4px;
+}
+
+.export-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--light-purple);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.export-btn:hover {
+  border-color: var(--mid-purple);
+  color: var(--off-white);
+}
+
+.export-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Search history */
+.history-panel {
+  background: #1c0a22;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 28px;
+  margin-bottom: 28px;
+  display: none;
+}
+
+.history-heading {
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 10px;
+}
+
+.history-item {
+  font-size: 0.85rem;
+  color: var(--light-purple);
+  padding: 5px 0;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(139,56,141,0.08);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+
+.history-item:last-child { border-bottom: none; }
+.history-item:hover { color: var(--off-white); }
 .answer-h1, .answer-h2, .answer-h3 {
   font-family: 'Oswald', sans-serif;
   font-weight: 400;
@@ -411,6 +489,11 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 
   <div class="accent-bar"></div>
 
+  <div class="history-panel" id="historyPanel">
+    <div class="history-heading">Recent searches</div>
+    <div id="historyList"></div>
+  </div>
+
   <div class="search-panel">
     <div class="panel-label">Research Question</div>
     <textarea id="query" placeholder="What does the research say about education interventions reducing trafficking risk in Northern Ghana?"></textarea>
@@ -448,6 +531,11 @@ select:focus { outline: none; border-color: var(--mid-purple); }
       <div id="citationList"></div>
     </div>
     <div id="contradictionsPanel" style="display:none"></div>
+    <div class="export-bar">
+      <span class="export-label">Export</span>
+      <button class="export-btn" id="exportPdf" onclick="doExport('pdf')">PDF</button>
+      <button class="export-btn" id="exportDocx" onclick="doExport('docx')">Word</button>
+    </div>
     <div class="stats" id="stats"></div>
   </div>
 
@@ -568,150 +656,14 @@ async function doSearch() {
       errorDiv.textContent = data.error;
       errorDiv.style.display = 'block';
     } else {
-      const formatted = formatAnswerToHtml(data.answer);
-      document.getElementById('answerText').innerHTML = formatted;
-
-      const citationList = document.getElementById('citationList');
-      citationList.innerHTML = '';
-
-      data.citations.forEach(c => {
-        const item = document.createElement('div');
-        item.className = 'citation-item';
-        item.id = 'cite-' + String(c.index);
-
-        const num = document.createElement('div');
-        num.className = 'citation-num';
-        num.textContent = '[' + String(c.index) + ']';
-
-        const body = document.createElement('div');
-
-        const titleRow = document.createElement('div');
-        titleRow.className = 'citation-title';
-
-        if (c.url) {
-          const titleLink = document.createElement('a');
-          titleLink.href = String(c.url).trim();
-          titleLink.target = '_blank';
-          titleLink.rel = 'noopener noreferrer';
-          titleLink.textContent = c.title != null ? String(c.title) : '';
-          titleRow.appendChild(titleLink);
-        } else {
-          titleRow.appendChild(document.createTextNode(c.title != null ? String(c.title) : ''));
-        }
-
-        // Evidence strength badge
-        const strength = c.evidence_strength || 1;
-        const badge = document.createElement('span');
-        badge.className = 'evidence-badge ' + (strength >= 3 ? 'strong' : strength === 2 ? 'moderate' : 'single');
-        badge.textContent = strength >= 3
-          ? strength + ' sources'
-          : strength === 2 ? '2 sources' : '1 source';
-        titleRow.appendChild(badge);
-
-        body.appendChild(titleRow);
-
-        const pdfUrl = c.pdf_url != null ? String(c.pdf_url).trim() : '';
-        if (pdfUrl) {
-          const actions = document.createElement('div');
-          actions.className = 'citation-actions';
-          const pdfLink = document.createElement('a');
-          pdfLink.className = 'citation-pdf-link';
-          pdfLink.href = pdfUrl;
-          pdfLink.target = '_blank';
-          pdfLink.rel = 'noopener noreferrer';
-          pdfLink.textContent = 'View PDF';
-          actions.appendChild(pdfLink);
-          body.appendChild(actions);
-        }
-
-        const meta = document.createElement('div');
-        meta.className = 'citation-meta';
-        const spAuthors = document.createElement('span');
-        spAuthors.textContent = c.authors != null ? String(c.authors) : '';
-        const spDot = document.createElement('span');
-        spDot.textContent = '\u00b7';
-        const spYear = document.createElement('span');
-        spYear.textContent = c.year != null ? String(c.year) : '';
-
-        // Fix 3: page reference display
-        const pageRef = (c.page_start && c.page_end)
-          ? 'pp. ' + String(c.page_start) + '\u2013' + String(c.page_end)
-          : (c.page_start ? 'p. ' + String(c.page_start) : '');
-
-        const spCat = document.createElement('span');
-        spCat.className = 'citation-category';
-        spCat.textContent = c.category != null ? String(c.category) : '';
-
-        const metaChildren = [spAuthors, spDot, spYear];
-        if (pageRef) {
-          const spPage = document.createElement('span');
-          spPage.className = 'citation-pages';
-          spPage.textContent = pageRef;
-          metaChildren.push(document.createTextNode('\u00b7'), spPage);
-        }
-        metaChildren.push(spCat);
-        meta.append(...metaChildren);
-
-        body.appendChild(meta);
-
-        // Fix 2: source excerpt
-        const excerptText = c.excerpt != null ? String(c.excerpt).trim() : '';
-        if (excerptText) {
-          const excerpt = document.createElement('div');
-          excerpt.className = 'citation-excerpt';
-          excerpt.textContent = excerptText.length > 300
-            ? excerptText.slice(0, 300) + '\u2026'
-            : excerptText;
-          body.appendChild(excerpt);
-        }
-        item.append(num, body);
-        citationList.appendChild(item);
-      });
-
-      document.getElementById('stats').textContent =
-        String(data.citations.length) + ' sources reviewed';
-
-      // Contradiction panel
-      const contraPanel = document.getElementById('contradictionsPanel');
-      const contras = data.contradictions || [];
-      if (contras.length > 0) {
-        const panel = document.createElement('div');
-        panel.className = 'contradictions-panel';
-        const heading = document.createElement('div');
-        heading.className = 'contradictions-heading';
-        heading.textContent = 'Conflicting evidence detected';
-        panel.appendChild(heading);
-        contras.forEach(contra => {
-          const item = document.createElement('div');
-          item.className = 'contradiction-item';
-          const topic = document.createElement('div');
-          topic.className = 'contradiction-topic';
-          topic.textContent = contra.topic || '';
-          item.appendChild(topic);
-          const sides = document.createElement('div');
-          sides.className = 'contradiction-sides';
-          (contra.sides || []).forEach(side => {
-            const sideEl = document.createElement('div');
-            sideEl.className = 'contradiction-side';
-            const num = document.createElement('span');
-            num.className = 'contradiction-side-num';
-            num.textContent = '[' + String(side.index) + ']';
-            sideEl.appendChild(num);
-            sideEl.appendChild(document.createTextNode(side.claim || ''));
-            sides.appendChild(sideEl);
-          });
-          item.appendChild(sides);
-          panel.appendChild(item);
-        });
-        contraPanel.innerHTML = '';
-        contraPanel.appendChild(panel);
-        contraPanel.style.display = 'block';
-      } else {
-        contraPanel.style.display = 'none';
-        contraPanel.innerHTML = '';
-      }
-      resultBox.style.display = 'block';
-      resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      _lastResult = {
+        query,
+        answer: data.answer,
+        citations: data.citations,
+        contradictions: data.contradictions || [],
+      };
+      _renderResult(data.answer, data.citations, data.contradictions || []);
+      _pushHistory(_lastResult);
     }
   } catch(e) {
     errorDiv.textContent = 'Search failed. Is the server running?';
@@ -719,6 +671,229 @@ async function doSearch() {
   }
   btn.disabled = false;
   loading.style.display = 'none';
+}
+
+// ── Session search history ────────────────────────────────────────────────────
+
+const _history = [];   // { query, answer, citations, contradictions }
+
+function _pushHistory(entry) {
+  // Avoid duplicates
+  if (_history.length && _history[_history.length - 1].query === entry.query) return;
+  _history.push(entry);
+  _renderHistory();
+}
+
+function _renderHistory() {
+  const panel = document.getElementById('historyPanel');
+  const list  = document.getElementById('historyList');
+  if (_history.length < 2) { panel.style.display = 'none'; return; }
+  list.innerHTML = '';
+  // Show most recent first, skip the current (last) entry
+  [..._history].reverse().slice(1).forEach((h, i) => {
+    const el = document.createElement('div');
+    el.className   = 'history-item';
+    el.textContent = h.query;
+    el.title       = h.query;
+    el.onclick     = () => _restoreResult(h);
+    list.appendChild(el);
+  });
+  panel.style.display = 'block';
+}
+
+function _restoreResult(h) {
+  document.getElementById('query').value = h.query;
+  _renderResult(h.answer, h.citations, h.contradictions);
+  _lastResult = h;
+}
+
+// ── Shared result renderer ────────────────────────────────────────────────────
+
+let _lastResult = null;   // { query, answer, citations, contradictions }
+
+function _renderResult(answer, citations, contradictions) {
+  const formatted = formatAnswerToHtml(answer);
+  document.getElementById('answerText').innerHTML = formatted;
+
+  const citationList = document.getElementById('citationList');
+  citationList.innerHTML = '';
+
+  citations.forEach(c => {
+    const item = document.createElement('div');
+    item.className = 'citation-item';
+    item.id = 'cite-' + String(c.index);
+
+    const num = document.createElement('div');
+    num.className = 'citation-num';
+    num.textContent = '[' + String(c.index) + ']';
+
+    const body = document.createElement('div');
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'citation-title';
+
+    if (c.url) {
+      const titleLink = document.createElement('a');
+      titleLink.href = String(c.url).trim();
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      titleLink.textContent = c.title != null ? String(c.title) : '';
+      titleRow.appendChild(titleLink);
+    } else {
+      titleRow.appendChild(document.createTextNode(c.title != null ? String(c.title) : ''));
+    }
+
+    // Evidence strength badge
+    const strength = c.evidence_strength || 1;
+    const badge = document.createElement('span');
+    badge.className = 'evidence-badge ' + (strength >= 3 ? 'strong' : strength === 2 ? 'moderate' : 'single');
+    badge.textContent = strength + ' source' + (strength !== 1 ? 's' : '');
+    titleRow.appendChild(badge);
+
+    body.appendChild(titleRow);
+
+    const pdfUrl = c.pdf_url != null ? String(c.pdf_url).trim() : '';
+    if (pdfUrl) {
+      const actions = document.createElement('div');
+      actions.className = 'citation-actions';
+      const pdfLink = document.createElement('a');
+      pdfLink.className = 'citation-pdf-link';
+      pdfLink.href = pdfUrl;
+      pdfLink.target = '_blank';
+      pdfLink.rel = 'noopener noreferrer';
+      pdfLink.textContent = 'View PDF';
+      actions.appendChild(pdfLink);
+      body.appendChild(actions);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'citation-meta';
+    const spAuthors = document.createElement('span');
+    spAuthors.textContent = c.authors != null ? String(c.authors) : '';
+    const spDot = document.createElement('span');
+    spDot.textContent = '\u00b7';
+    const spYear = document.createElement('span');
+    spYear.textContent = c.year != null ? String(c.year) : '';
+
+    const pageRef = (c.page_start && c.page_end)
+      ? 'pp. ' + String(c.page_start) + '\u2013' + String(c.page_end)
+      : (c.page_start ? 'p. ' + String(c.page_start) : '');
+
+    const spCat = document.createElement('span');
+    spCat.className = 'citation-category';
+    spCat.textContent = c.category != null ? String(c.category) : '';
+
+    const metaChildren = [spAuthors, spDot, spYear];
+    if (pageRef) {
+      const spPage = document.createElement('span');
+      spPage.className = 'citation-pages';
+      spPage.textContent = pageRef;
+      metaChildren.push(document.createTextNode('\u00b7'), spPage);
+    }
+    metaChildren.push(spCat);
+    meta.append(...metaChildren);
+    body.appendChild(meta);
+
+    const excerptText = c.excerpt != null ? String(c.excerpt).trim() : '';
+    if (excerptText) {
+      const excerpt = document.createElement('div');
+      excerpt.className = 'citation-excerpt';
+      excerpt.textContent = excerptText.length > 300
+        ? excerptText.slice(0, 300) + '\u2026'
+        : excerptText;
+      body.appendChild(excerpt);
+    }
+
+    item.append(num, body);
+    citationList.appendChild(item);
+  });
+
+  // Contradiction panel
+  const contraPanel = document.getElementById('contradictionsPanel');
+  const contras = contradictions || [];
+  if (contras.length > 0) {
+    const panel = document.createElement('div');
+    panel.className = 'contradictions-panel';
+    const heading = document.createElement('div');
+    heading.className = 'contradictions-heading';
+    heading.textContent = 'Conflicting evidence detected';
+    panel.appendChild(heading);
+    contras.forEach(contra => {
+      const item = document.createElement('div');
+      item.className = 'contradiction-item';
+      const topic = document.createElement('div');
+      topic.className = 'contradiction-topic';
+      topic.textContent = contra.topic || '';
+      item.appendChild(topic);
+      const sides = document.createElement('div');
+      sides.className = 'contradiction-sides';
+      (contra.sides || []).forEach(side => {
+        const sideEl = document.createElement('div');
+        sideEl.className = 'contradiction-side';
+        const numEl = document.createElement('span');
+        numEl.className = 'contradiction-side-num';
+        numEl.textContent = '[' + String(side.index) + ']';
+        sideEl.appendChild(numEl);
+        sideEl.appendChild(document.createTextNode(side.claim || ''));
+        sides.appendChild(sideEl);
+      });
+      item.appendChild(sides);
+      panel.appendChild(item);
+    });
+    contraPanel.innerHTML = '';
+    contraPanel.appendChild(panel);
+    contraPanel.style.display = 'block';
+  } else {
+    contraPanel.style.display = 'none';
+    contraPanel.innerHTML = '';
+  }
+
+  document.getElementById('stats').textContent =
+    String(citations.length) + ' sources reviewed';
+
+  const resultBox = document.getElementById('resultBox');
+  resultBox.style.display = 'block';
+  resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+
+async function doExport(fmt) {
+  if (!_lastResult) return;
+  const btn = document.getElementById(fmt === 'pdf' ? 'exportPdf' : 'exportDocx');
+  btn.disabled = true;
+  btn.textContent = fmt === 'pdf' ? 'Generating PDF...' : 'Generating Word...';
+
+  try {
+    const res = await fetch('/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        format: fmt,
+        query: _lastResult.query,
+        answer: _lastResult.answer,
+        citations: _lastResult.citations,
+        contradictions: _lastResult.contradictions || [],
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert('Export failed: ' + (err.error || res.status));
+      return;
+    }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = fmt === 'pdf' ? 'HEP-Research-Export.pdf' : 'HEP-Research-Export.docx';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert('Export failed: ' + e.message);
+  }
+
+  btn.disabled = false;
+  btn.textContent = fmt === 'pdf' ? 'PDF' : 'Word';
 }
 
 document.getElementById('query').addEventListener('keydown', e => {

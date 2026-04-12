@@ -5,6 +5,7 @@ A Flask web app for querying the HEP research PDF library.
 Uses Claude API for answer generation and TF-IDF for search.
 """
 
+import io
 import re
 import csv
 import os
@@ -86,6 +87,13 @@ app    = Flask(__name__)
 
 _max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 app.config["MAX_CONTENT_LENGTH"] = _max_upload_mb * 1024 * 1024
+
+try:
+    from hep_export import export_pdf, export_docx
+    EXPORT_AVAILABLE = True
+except ImportError:
+    EXPORT_AVAILABLE = False
+    export_pdf = export_docx = None
 
 try:
     from pdf_ingest import ingest_pdf, upload_config_detail, upload_config_ok
@@ -690,6 +698,40 @@ def search_route():
         return jsonify(generate_answer(query, hits))
     except Exception as e:
         return jsonify({"error": str(e)})
+
+
+@app.route("/export", methods=["POST"])
+def export_route():
+    if not EXPORT_AVAILABLE:
+        return jsonify({"error": "Export not available - hep_export module missing"}), 500
+
+    data          = request.get_json()
+    fmt           = data.get("format", "pdf").lower()   # "pdf" or "docx"
+    query         = data.get("query", "Untitled query")
+    answer        = data.get("answer", "")
+    citations     = data.get("citations", [])
+    contradictions = data.get("contradictions", [])
+
+    try:
+        if fmt == "docx":
+            file_bytes = export_docx(query, answer, citations, contradictions)
+            mime       = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            filename   = "HEP-Research-Export.docx"
+        else:
+            file_bytes = export_pdf(query, answer, citations, contradictions)
+            mime       = "application/pdf"
+            filename   = "HEP-Research-Export.pdf"
+
+        buf = io.BytesIO(file_bytes)
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype=mime,
+            as_attachment=True,
+            download_name=filename,
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/health")
