@@ -1017,33 +1017,130 @@ async function doSearch() {
   const category = document.getElementById('category').value;
   const btn = document.getElementById('searchBtn');
   const loading = document.getElementById('loading');
+  const loadingText = loading.querySelector('div');
   const resultBox = document.getElementById('resultBox');
   const errorDiv = document.getElementById('error');
 
   btn.disabled = true;
+  loadingText.textContent = 'Searching the library...';
   loading.style.display = 'inline-flex';
   resultBox.style.display = 'none';
   errorDiv.style.display = 'none';
 
+  // Streaming state
+  let _streamAnswer = '';
+  let _streamCitations = [];
+  let _streamContradictions = [];
+  let _renderThrottle = null;
+
+  function _throttledRender() {
+    if (_renderThrottle) return;
+    _renderThrottle = setTimeout(() => {
+      _renderThrottle = null;
+      document.getElementById('answerText').innerHTML = formatAnswerToHtml(_streamAnswer);
+    }, 80);
+  }
+
   try {
-    const res = await fetch('/search', {
+    const res = await fetch('/search-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, category })
     });
-    const data = await res.json();
-    if (data.error) {
-      errorDiv.textContent = data.error;
-      errorDiv.style.display = 'block';
-    } else {
-      _lastResult = {
-        query,
-        answer: data.answer,
-        citations: data.citations,
-        contradictions: data.contradictions || [],
-      };
-      _renderResult(data.answer, data.citations, data.contradictions || []);
-      _pushHistory(_lastResult);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE messages (split on double newline)
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop(); // keep incomplete last chunk
+
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        let eventName = 'message';
+        let eventData = '';
+        for (const line of part.split('\n')) {
+          if (line.startsWith('event: ')) eventName = line.slice(7).trim();
+          else if (line.startsWith('data: ')) eventData = line.slice(6);
+        }
+        if (!eventData) continue;
+
+        const payload = JSON.parse(eventData);
+
+        if (eventName === 'citations') {
+          _streamCitations = payload.citations || [];
+          // Render citations immediately (no evidence badges yet)
+          const citationList = document.getElementById('citationList');
+          citationList.innerHTML = '';
+          _streamCitations.forEach(c => {
+            c.evidence_strength = 0; // placeholder — badges hidden until evidence arrives
+          });
+          // Show result box with citations + empty answer
+          document.getElementById('answerText').innerHTML = '';
+          document.getElementById('contradictionsPanel').style.display = 'none';
+          document.getElementById('contradictionsPanel').innerHTML = '';
+          document.getElementById('stats').textContent = _streamCitations.length + ' sources reviewed';
+          _renderCitations(_streamCitations);
+          resultBox.style.display = 'block';
+          resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          loadingText.textContent = 'Generating answer...';
+        }
+
+        else if (eventName === 'answer_chunk') {
+          _streamAnswer += payload.text || '';
+          _throttledRender();
+        }
+
+        else if (eventName === 'answer_done') {
+          // Final render of complete answer
+          if (_renderThrottle) { clearTimeout(_renderThrottle); _renderThrottle = null; }
+          document.getElementById('answerText').innerHTML = formatAnswerToHtml(_streamAnswer);
+          loadingText.textContent = 'Checking for contradictions...';
+        }
+
+        else if (eventName === 'evidence') {
+          // Update evidence badges on existing citation cards
+          const evidence = payload.evidence || {};
+          _streamCitations.forEach(c => {
+            const strength = evidence[String(c.index)] || 1;
+            c.evidence_strength = strength;
+            const card = document.getElementById('cite-' + c.index);
+            if (card) {
+              const badge = card.querySelector('.evidence-badge');
+              if (badge) {
+                badge.className = 'evidence-badge ' + (strength >= 3 ? 'strong' : strength === 2 ? 'moderate' : 'single');
+                badge.textContent = strength + ' source' + (strength !== 1 ? 's' : '');
+              }
+            }
+          });
+        }
+
+        else if (eventName === 'contradictions') {
+          _streamContradictions = payload.contradictions || [];
+          _renderContradictions(_streamContradictions);
+        }
+
+        else if (eventName === 'error') {
+          errorDiv.textContent = payload.error || 'Unknown error';
+          errorDiv.style.display = 'block';
+        }
+
+        else if (eventName === 'done') {
+          _lastResult = {
+            query,
+            answer: _streamAnswer,
+            citations: _streamCitations,
+            contradictions: _streamContradictions,
+          };
+          _pushHistory(_lastResult);
+        }
+      }
     }
   } catch(e) {
     errorDiv.textContent = 'Search failed. Is the server running?';
@@ -1406,13 +1503,9 @@ function _restoreResult(h) {
 
 let _lastResult = null;   // { query, answer, citations, contradictions }
 
-function _renderResult(answer, citations, contradictions) {
-  const formatted = formatAnswerToHtml(answer);
-  document.getElementById('answerText').innerHTML = formatted;
-
+function _renderCitations(citations) {
   const citationList = document.getElementById('citationList');
   citationList.innerHTML = '';
-
   citations.forEach(c => {
     const item = document.createElement('div');
     item.className = 'citation-item';
@@ -1438,11 +1531,11 @@ function _renderResult(answer, citations, contradictions) {
       titleRow.appendChild(document.createTextNode(c.title != null ? String(c.title) : ''));
     }
 
-    // Evidence strength badge
-    const strength = c.evidence_strength || 1;
+    // Evidence strength badge (hidden until evidence event arrives)
+    const strength = c.evidence_strength || 0;
     const badge = document.createElement('span');
-    badge.className = 'evidence-badge ' + (strength >= 3 ? 'strong' : strength === 2 ? 'moderate' : 'single');
-    badge.textContent = strength + ' source' + (strength !== 1 ? 's' : '');
+    badge.className = 'evidence-badge ' + (strength === 0 ? 'pending' : strength >= 3 ? 'strong' : strength === 2 ? 'moderate' : 'single');
+    badge.textContent = strength === 0 ? '' : strength + ' source' + (strength !== 1 ? 's' : '');
     titleRow.appendChild(badge);
 
     body.appendChild(titleRow);
@@ -1464,7 +1557,6 @@ function _renderResult(answer, citations, contradictions) {
     const meta = document.createElement('div');
     meta.className = 'citation-meta';
 
-    // Build meta parts - only include non-empty values, join with · separator
     const metaParts = [];
     const authors = c.authors && String(c.authors).trim();
     const year    = c.year    && String(c.year).trim();
@@ -1511,8 +1603,9 @@ function _renderResult(answer, citations, contradictions) {
     item.append(num, body);
     citationList.appendChild(item);
   });
+}
 
-  // Contradiction panel
+function _renderContradictions(contradictions) {
   const contraPanel = document.getElementById('contradictionsPanel');
   const contras = contradictions || [];
   if (contras.length > 0) {
@@ -1551,10 +1644,14 @@ function _renderResult(answer, citations, contradictions) {
     contraPanel.style.display = 'none';
     contraPanel.innerHTML = '';
   }
+}
 
+function _renderResult(answer, citations, contradictions) {
+  document.getElementById('answerText').innerHTML = formatAnswerToHtml(answer);
+  _renderCitations(citations);
+  _renderContradictions(contradictions);
   document.getElementById('stats').textContent =
     String(citations.length) + ' sources reviewed';
-
   const resultBox = document.getElementById('resultBox');
   resultBox.style.display = 'block';
   resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });

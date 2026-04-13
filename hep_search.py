@@ -6,6 +6,7 @@ Uses Claude API for answer generation and hybrid Qdrant search.
 """
 
 import io
+import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -486,9 +487,11 @@ JSON response only:"""
 
 # ── Answer Generation ─────────────────────────────────────────────────────────
 
-def generate_answer(query: str, results: list) -> dict:
+def _build_answer_context(query: str, results: list) -> tuple:
+    """Build citations list and Claude prompt from search results.
+    Returns (citations, prompt). Shared by generate_answer and search-stream."""
     if not results:
-        return {"answer": "No relevant documents found.", "citations": [], "contradictions": []}
+        return [], ""
 
     context_parts = []
     citations     = []
@@ -567,6 +570,15 @@ Sources:
 
 Answer:"""
 
+    return citations, prompt
+
+
+def generate_answer(query: str, results: list) -> dict:
+    if not results:
+        return {"answer": "No relevant documents found.", "citations": [], "contradictions": []}
+
+    citations, prompt = _build_answer_context(query, results)
+
     # Start contradiction detection in parallel with answer generation
     with ThreadPoolExecutor(max_workers=1) as executor:
         contradiction_future = executor.submit(detect_contradictions, query, results)
@@ -625,6 +637,73 @@ def search_route():
         return jsonify(generate_answer(query, hits))
     except Exception as e:
         return jsonify({"error": str(e)})
+
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@app.route("/search-stream", methods=["POST"])
+def search_stream_route():
+    data     = request.get_json()
+    query    = data.get("query", "").strip()
+    category = data.get("category", "All")
+    if not query:
+        def _err():
+            yield _sse_event("error", {"error": "No query provided"})
+            yield _sse_event("done", {})
+        return Response(_err(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    def generate():
+        try:
+            hits = semantic_search(query, category=category)
+            if not hits:
+                yield _sse_event("error", {"error": "No relevant documents found."})
+                yield _sse_event("done", {})
+                return
+
+            citations, prompt = _build_answer_context(query, hits)
+
+            # Send citations immediately — before Claude starts
+            yield _sse_event("citations", {"citations": citations})
+
+            # Start contradiction detection in background
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                contradiction_future = executor.submit(detect_contradictions, query, hits)
+
+                # Stream answer from Claude
+                full_answer = []
+                with client.messages.stream(
+                    model=ANSWER_MODEL,
+                    max_tokens=1000,
+                    messages=[{"role": "user", "content": prompt}]
+                ) as stream:
+                    for text in stream.text_stream:
+                        full_answer.append(text)
+                        yield _sse_event("answer_chunk", {"text": text})
+
+                answer_text = "".join(full_answer).strip()
+                yield _sse_event("answer_done", {})
+
+                # Evidence strength (instant — no API call)
+                evidence = compute_evidence_strength(citations, answer_text)
+                yield _sse_event("evidence", {"evidence": {str(k): v for k, v in evidence.items()}})
+
+                # Collect contradiction result
+                try:
+                    contradictions = contradiction_future.result(timeout=30)
+                except Exception:
+                    contradictions = []
+                yield _sse_event("contradictions", {"contradictions": contradictions})
+
+        except Exception as e:
+            yield _sse_event("error", {"error": str(e)})
+
+        yield _sse_event("done", {})
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/similar", methods=["POST"])
