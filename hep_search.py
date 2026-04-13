@@ -2,25 +2,21 @@
 """
 HEP Research Library - Search Application
 A Flask web app for querying the HEP research PDF library.
-Uses Claude API for answer generation and TF-IDF for search.
+Uses Claude API for answer generation and hybrid Qdrant search.
 """
 
 import io
 import re
-import csv
+import time
+from concurrent.futures import ThreadPoolExecutor
 import os
-import pickle
 import tempfile
-import urllib.request
-import urllib.error
 from urllib.parse import quote
-import numpy as np
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file, abort, redirect, Response
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 import anthropic
-import fitz  # pymupdf
 import voyageai
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
@@ -29,13 +25,6 @@ from qdrant_client.http import models as qm
 
 BASE_DIR = Path(__file__).resolve().parent
 LOGO_PATH = Path(os.environ.get("HEP_LOGO_PATH", str(BASE_DIR / "HEP logo white.png")))
-
-RESEARCH_DIR_ENV = os.environ.get("HEP_RESEARCH_DIR")
-RESEARCH_DIR = Path(RESEARCH_DIR_ENV) if RESEARCH_DIR_ENV else None
-OUTPUT_CSV = (RESEARCH_DIR / "_research_index.csv") if RESEARCH_DIR else None
-
-INDEX_URL = os.environ.get("HEP_INDEX_URL", "").strip() or None
-INDEX_FILE = Path(os.environ.get("HEP_INDEX_FILE", str(BASE_DIR / "data" / "_vector_index.pkl"))).resolve()
 
 
 def _clean_env_str(val: str | None) -> str:
@@ -58,6 +47,10 @@ FINAL_TOP_K          = int(os.environ.get("FINAL_TOP_K",  "8"))
 
 # Phase 3 flags
 CONTRADICTION_ENABLED = os.environ.get("CONTRADICTION_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+
+# Model configuration
+ANSWER_MODEL        = os.environ.get("ANSWER_MODEL", "claude-opus-4-5").strip() or "claude-opus-4-5"
+CONTRADICTION_MODEL = os.environ.get("CONTRADICTION_MODEL", "claude-sonnet-4-5-20250514").strip() or "claude-sonnet-4-5-20250514"
 
 QDRANT_URL = _clean_env_str(os.environ.get("QDRANT_URL"))
 
@@ -138,65 +131,31 @@ def _payload_too_large(_e):
 def _require_basic_auth():
     if not AUTH_ENABLED:
         return None
-    if request.path == "/health":
+    # These routes must remain open (health check, static assets)
+    if request.path in ("/health", "/logo"):
         return None
-    # Only protect admin routes - main search interface is open
+    # Admin is open — accessible after logging into the main site
     if request.path.startswith("/admin"):
-        auth = request.authorization
-        if not auth or auth.username != AUTH_USERNAME or auth.password != AUTH_PASSWORD:
-            return _unauthorized()
+        return None
+    # Everything else requires authentication
+    auth = request.authorization
+    if not auth or auth.username != AUTH_USERNAME or auth.password != AUTH_PASSWORD:
+        return _unauthorized()
     return None
-
-# ── Text and Vector Helpers ───────────────────────────────────────────────────
-
-def extract_text(pdf_path: Path, max_chars: int = 8000) -> str:
-    try:
-        doc = fitz.open(str(pdf_path))
-        text = ""
-        for page_num in range(min(8, len(doc))):
-            text += doc[page_num].get_text()
-        doc.close()
-        return text[:max_chars].strip()
-    except Exception:
-        return ""
-
-
-def tokenise(text: str) -> list:
-    return re.findall(r'\b[a-z]{3,}\b', text.lower())
-
-
-def build_vocab(documents: list) -> dict:
-    n_docs = len(documents)
-    word_doc_counts = {}
-    for doc in documents:
-        words = set(tokenise(doc["combined"]))
-        for word in words:
-            word_doc_counts[word] = word_doc_counts.get(word, 0) + 1
-    filtered = sorted(
-        word for word, count in word_doc_counts.items()
-        if 2 <= count <= n_docs * 0.5
-    )
-    return {word: idx for idx, word in enumerate(filtered)}
-
-
-def embed(text: str, vocab: dict) -> np.ndarray:
-    vec = np.zeros(len(vocab), dtype=np.float32)
-    for word in tokenise(text):
-        idx = vocab.get(word)
-        if idx is not None and idx < len(vec):
-            vec[idx] += 1.0
-    norm = np.linalg.norm(vec)
-    if norm > 0:
-        vec /= norm
-    return vec
-
-
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b))
 
 
 _voy    = None
 _qdrant = None
+
+# BM25 corpus cache — avoids re-scrolling Qdrant on every search
+_bm25_cache: dict[str, list] = {}   # category -> records list
+_bm25_cache_ts: dict[str, float] = {}  # category -> timestamp
+_BM25_CACHE_TTL = 300  # seconds (5 minutes)
+
+# Document list cache — avoids re-scrolling on every /documents page load
+_docs_cache: list | None = None
+_docs_cache_ts: float = 0
+_DOCS_CACHE_TTL = 300  # seconds (5 minutes)
 
 
 def get_voyage_client() -> voyageai.Client:
@@ -229,109 +188,6 @@ def pdf_url_for_filename(filename: str) -> str:
     return f"{HEP_PDF_BASE_URL}/{quote(filename, safe='')}"
 
 
-# ── Index Building ────────────────────────────────────────────────────────────
-
-def _download_file(url: str, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".tmp")
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; HEPResearchLibrary/1.0; +https://hopeeducationproject.org)",
-                "Accept": "*/*",
-            },
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
-            f.write(r.read())
-        tmp.replace(dest)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except Exception:
-                pass
-
-
-def ensure_index_present() -> None:
-    if INDEX_FILE.exists():
-        return
-    if not INDEX_URL:
-        raise FileNotFoundError(
-            f"Index file not found at '{INDEX_FILE}'. "
-            "Set HEP_INDEX_URL to a downloadable _vector_index.pkl for cloud deployment."
-        )
-    print(f"Downloading index from {INDEX_URL} ...")
-    try:
-        _download_file(INDEX_URL, INDEX_FILE)
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise RuntimeError(f"Failed to download index from HEP_INDEX_URL: {e}") from e
-
-
-def _load_index_from_disk() -> dict:
-    with open(INDEX_FILE, "rb") as f:
-        return pickle.load(f)
-
-
-def build_index() -> dict:
-    ensure_index_present()
-    if INDEX_FILE.exists():
-        print("Loading existing index...")
-        try:
-            return _load_index_from_disk()
-        except Exception as e:
-            print(f"Failed to load index ({INDEX_FILE}): {e}")
-            try:
-                INDEX_FILE.unlink()
-            except Exception:
-                pass
-            if INDEX_URL:
-                print("Re-downloading index after load failure...")
-                ensure_index_present()
-                return _load_index_from_disk()
-            raise
-
-    if RESEARCH_DIR is None or OUTPUT_CSV is None:
-        raise RuntimeError("Cannot build index: HEP_RESEARCH_DIR is not set.")
-    if not OUTPUT_CSV.exists():
-        raise FileNotFoundError(f"Missing metadata CSV at '{OUTPUT_CSV}'.")
-
-    print("Building index from scratch...")
-    metadata = {}
-    with open(OUTPUT_CSV, "r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row.get("renamed_filename"):
-                metadata[row["renamed_filename"]] = row
-
-    documents = []
-    all_pdfs  = sorted(RESEARCH_DIR.glob("*.pdf"))
-    for i, pdf_path in enumerate(all_pdfs, 1):
-        filename = pdf_path.name
-        meta     = metadata.get(filename, {})
-        text     = extract_text(pdf_path)
-        combined = " ".join(filter(None, [
-            meta.get("full_title", ""), meta.get("authors", ""),
-            meta.get("keywords", ""), meta.get("abstract_summary", ""), text
-        ]))
-        documents.append({"filename": filename, "path": str(pdf_path),
-                          "text": text, "combined": combined, "meta": meta, "embedding": None})
-        if i % 50 == 0:
-            print(f"  Processed {i}/{len(all_pdfs)}...")
-
-    vocab = build_vocab(documents)
-    for i, doc in enumerate(documents, 1):
-        doc["embedding"] = embed(doc["combined"], vocab)
-        if i % 50 == 0:
-            print(f"  Embedded {i}/{len(documents)}...")
-
-    index = {"documents": documents, "vocab": vocab}
-    with open(INDEX_FILE, "wb") as f:
-        pickle.dump(index, f)
-    return index
-
-
 # ── Keyword / BM25 Helpers ────────────────────────────────────────────────────
 
 def _tokenise_query(text: str) -> list[str]:
@@ -352,6 +208,58 @@ def _scroll_by_category(qdrant: QdrantClient, category: str, limit: int = 2000) 
         with_vectors=False,
     )
     return records
+
+
+def _cached_scroll(qdrant: QdrantClient, category: str) -> list:
+    """Return BM25 corpus from cache or fresh scroll. TTL = 5 minutes."""
+    now = time.monotonic()
+    key = category or "All"
+    if key in _bm25_cache and (now - _bm25_cache_ts.get(key, 0)) < _BM25_CACHE_TTL:
+        return _bm25_cache[key]
+    records = _scroll_by_category(qdrant, category, limit=2000)
+    _bm25_cache[key] = records
+    _bm25_cache_ts[key] = now
+    return records
+
+
+def _invalidate_bm25_cache():
+    """Clear BM25 cache after corpus changes (e.g. PDF upload)."""
+    _bm25_cache.clear()
+    _bm25_cache_ts.clear()
+
+
+def _invalidate_docs_cache():
+    """Clear document list cache after corpus changes."""
+    global _docs_cache, _docs_cache_ts
+    _docs_cache = None
+    _docs_cache_ts = 0
+
+
+def _get_all_docs_cached() -> list:
+    """Return full deduplicated document list from cache or fresh scroll."""
+    global _docs_cache, _docs_cache_ts
+    now = time.monotonic()
+    if _docs_cache is not None and (now - _docs_cache_ts) < _DOCS_CACHE_TTL:
+        return _docs_cache
+
+    qdrant = get_qdrant_client()
+    records, _ = qdrant.scroll(
+        collection_name=QDRANT_COLLECTION,
+        limit=5000,
+        with_payload=True,
+        with_vectors=False,
+    )
+    seen = {}
+    for r in records:
+        p  = dict(r.payload or {})
+        fn = p.get("filename", "")
+        if fn and fn not in seen:
+            seen[fn] = p
+    docs = list(seen.values())
+    docs.sort(key=lambda d: (d.get("title") or d.get("filename") or "").lower())
+    _docs_cache = docs
+    _docs_cache_ts = now
+    return _docs_cache
 
 
 def _bm25_search(query: str, records: list, top_k: int) -> list[tuple[float, dict]]:
@@ -452,7 +360,7 @@ def semantic_search(query: str, category: str = "All", top_k: int = 8) -> list:
         query_filter=filt,
     )
     vector_hits  = [(float(h.score), dict(h.payload or {})) for h in response.points]
-    records      = _scroll_by_category(qdrant, category, limit=2000)
+    records      = _cached_scroll(qdrant, category)
     keyword_hits = _bm25_search(query, records, top_k=HYBRID_TOP_K)
     merged       = _rrf_merge(vector_hits, keyword_hits, top_n=HYBRID_TOP_K)
     return _rerank(query, merged, top_n=FINAL_TOP_K)
@@ -560,7 +468,7 @@ JSON response only:"""
 
     try:
         message = client.messages.create(
-            model="claude-opus-4-5",
+            model=CONTRADICTION_MODEL,
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -659,20 +567,24 @@ Sources:
 
 Answer:"""
 
-    message = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=1000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    answer_text = message.content[0].text.strip()
+    # Start contradiction detection in parallel with answer generation
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        contradiction_future = executor.submit(detect_contradictions, query, results)
 
-    # Phase 3: run evidence strength and contradiction detection in parallel
-    # (contradiction detection is a second Claude call - runs after answer generation)
-    evidence_strength = compute_evidence_strength(citations, answer_text)
-    for c in citations:
-        c["evidence_strength"] = evidence_strength.get(c["index"], 1)
+        message = client.messages.create(
+            model=ANSWER_MODEL,
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        answer_text = message.content[0].text.strip()
 
-    contradictions = detect_contradictions(query, results)
+        # Evidence strength runs instantly (no API call)
+        evidence_strength = compute_evidence_strength(citations, answer_text)
+        for c in citations:
+            c["evidence_strength"] = evidence_strength.get(c["index"], 1)
+
+        # Collect contradiction result (already running or finished)
+        contradictions = contradiction_future.result(timeout=30)
 
     return {
         "answer":        answer_text,
@@ -682,9 +594,6 @@ Answer:"""
 
 
 # ── Flask Routes ──────────────────────────────────────────────────────────────
-
-def get_index():
-    raise RuntimeError("Legacy TF-IDF index is disabled; semantic search uses Qdrant only.")
 
 
 @app.route("/")
@@ -799,43 +708,22 @@ def documents_route():
     """
     Full corpus browser - returns all documents deduplicated by filename.
     Supports optional ?category= and ?q= (title search) query params.
+    Uses server-side cache refreshed every 5 minutes or on upload.
     """
     category = request.args.get("category", "All").strip()
     q        = request.args.get("q", "").strip().lower()
 
     try:
-        qdrant = get_qdrant_client()
-        filt   = None
+        docs = _get_all_docs_cached()
+
+        # Filter by category if specified
         if category and category != "All":
-            filt = qm.Filter(
-                must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
-            )
-        # Scroll enough to cover the full corpus (one chunk per doc is all we need)
-        records, _ = qdrant.scroll(
-            collection_name=QDRANT_COLLECTION,
-            scroll_filter=filt,
-            limit=5000,
-            with_payload=True,
-            with_vectors=False,
-        )
+            docs = [d for d in docs if d.get("category") == category]
 
-        # Deduplicate by filename - keep first chunk encountered
-        seen = {}
-        for r in records:
-            p  = dict(r.payload or {})
-            fn = p.get("filename", "")
-            if fn and fn not in seen:
-                seen[fn] = p
-
-        docs = list(seen.values())
-
-        # Filter by title search if provided
+        # Filter by title/author search if provided
         if q:
             docs = [d for d in docs if q in (d.get("title") or d.get("filename") or "").lower()
                     or q in (d.get("authors") or "").lower()]
-
-        # Sort alphabetically by title
-        docs.sort(key=lambda d: (d.get("title") or d.get("filename") or "").lower())
 
         results = [{
             "title":    d.get("title") or d.get("filename") or "Unknown",
@@ -969,12 +857,9 @@ def health():
         "hybrid_retrieval":     True,
         "rerank_enabled":       RERANK_ENABLED,
         "contradiction_enabled": CONTRADICTION_ENABLED,
+        "answer_model":         ANSWER_MODEL,
+        "contradiction_model":  CONTRADICTION_MODEL,
     }), 200
-
-
-@app.route("/rebuild-index", methods=["POST"])
-def rebuild():
-    return jsonify({"error": "Legacy TF-IDF rebuild is disabled. Use build_embeddings.py + Qdrant."}), 410
 
 
 @app.route("/admin")
@@ -1038,6 +923,9 @@ def admin_upload():
         f.save(tmp_path)
         result = ingest_pdf(tmp_path, filename)
         code   = 200 if result.get("ok") else 500
+        if result.get("ok"):
+            _invalidate_bm25_cache()
+            _invalidate_docs_cache()
         return jsonify({
             "ok":              bool(result.get("ok")),
             "steps":           result.get("steps", []),
