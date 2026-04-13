@@ -43,6 +43,24 @@ header {
   letter-spacing: 0.05em;
 }
 
+.admin-link {
+  color: var(--text-muted);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  border: 1px solid rgba(154,133,160,0.25);
+  border-radius: 20px;
+  padding: 3px 14px;
+  transition: color 0.2s, border-color 0.2s;
+}
+.admin-link:hover {
+  color: var(--light-purple);
+  border-color: var(--border);
+}
+
 .discover-toggle {
   background: transparent;
   border: 1px solid var(--border);
@@ -747,6 +765,7 @@ select:focus { outline: none; border-color: var(--mid-purple); }
   <div style="display:flex;align-items:center;gap:12px;">
     <div class="doc-count" id="corpusStats">Loading corpus...</div>
     <button class="discover-toggle" id="discoverToggle" onclick="toggleDiscover()">Browse library</button>
+    <a href="/admin" class="admin-link">Admin</a>
   </div>
 </header>
 
