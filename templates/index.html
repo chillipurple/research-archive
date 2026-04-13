@@ -43,6 +43,23 @@ header {
   letter-spacing: 0.05em;
 }
 
+.header-cta {
+  background: var(--mid-purple);
+  border: none;
+  border-radius: 20px;
+  color: var(--off-white);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 5px 18px;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+.header-cta:hover { background: #9d42a0; }
+
 .admin-link {
   color: var(--text-muted);
   font-family: 'Oswald', sans-serif;
@@ -800,6 +817,7 @@ select:focus { outline: none; border-color: var(--mid-purple); }
   <img src="{{ logo_url }}" alt="Hope Education Project" class="header-logo">
   <div style="display:flex;align-items:center;gap:12px;">
     <div class="doc-count" id="corpusStats">Loading corpus...</div>
+    <button class="header-cta" onclick="window.scrollTo({top:0,behavior:'smooth'});document.getElementById('query').focus()">Run Research Query</button>
     <button class="discover-toggle" id="discoverToggle" onclick="toggleDiscover()">Browse library</button>
     <a href="/admin" class="admin-link">Admin</a>
   </div>
@@ -875,7 +893,7 @@ select:focus { outline: none; border-color: var(--mid-purple); }
         <option>Research and Data</option>
         <option>Tamale and Northern Ghana</option>
       </select>
-      <button class="search-btn" id="searchBtn" onclick="doSearch()">Search Library</button>
+      <button class="search-btn" id="searchBtn" onclick="doSearch()">Run Research Query</button>
     </div>
     <div class="controls-hint">Select a category to restrict search to that topic area only. Leave on All categories for the full corpus.</div>
     <div class="loading" id="loading" role="status" aria-live="polite">
@@ -1133,7 +1151,7 @@ async function loadCorpusStats() {
     const data = await res.json();
     const el   = document.getElementById('corpusStats');
     if (data.ok && data.chunks) {
-      el.textContent = data.chunks.toLocaleString() + ' chunks indexed';
+      el.textContent = data.total ? data.total.toLocaleString() + ' documents' : data.chunks.toLocaleString() + ' documents';
     } else {
       el.textContent = 'Research Library';
     }
