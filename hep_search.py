@@ -870,13 +870,22 @@ def discover_route():
             filt = qm.Filter(
                 must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
             )
-        records, _ = qdrant.scroll(
-            collection_name=QDRANT_COLLECTION,
-            scroll_filter=filt,
-            limit=500,
-            with_payload=True,
-            with_vectors=False,
-        )
+        # Paginate to get full category corpus
+        all_records = []
+        offset = None
+        while True:
+            batch, offset = qdrant.scroll(
+                collection_name=QDRANT_COLLECTION,
+                scroll_filter=filt,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            all_records.extend(batch)
+            if offset is None:
+                break
+        records = all_records
 
         # One chunk per document (first chunk encountered)
         seen  = {}
