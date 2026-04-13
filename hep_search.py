@@ -140,9 +140,11 @@ def _require_basic_auth():
         return None
     if request.path == "/health":
         return None
-    auth = request.authorization
-    if not auth or auth.username != AUTH_USERNAME or auth.password != AUTH_PASSWORD:
-        return _unauthorized()
+    # Only protect admin routes - main search interface is open
+    if request.path.startswith("/admin"):
+        auth = request.authorization
+        if not auth or auth.username != AUTH_USERNAME or auth.password != AUTH_PASSWORD:
+            return _unauthorized()
     return None
 
 # ── Text and Vector Helpers ───────────────────────────────────────────────────
@@ -624,15 +626,31 @@ def generate_answer(query: str, results: list) -> dict:
 
     context = "\n\n---\n\n".join(context_parts)
 
-    prompt = f"""You are a research assistant for Hope Education Project, an anti-trafficking NGO focused on Ghana and West Africa.
+    prompt = f"""You are a research analyst for Hope Education Project, a survivor-led anti-trafficking NGO operating in Ghana and West Africa. You have deep field knowledge of trafficking patterns, enforcement systems, and survivor experience in the region.
 
-Answer the following research question using ONLY the provided sources.
-- Write in clear analytical prose
-- Cite sources using [number] notation inline
-- Be specific about geographies, statistics, and findings
-- Distinguish between trafficking and smuggling where relevant
-- Note gaps or contradictions in the evidence
+Answer the following research question using ONLY the provided sources. Apply this analytical framework:
+
+WHAT COUNTS AS STRONG EVIDENCE - lead with these:
+- Documented prosecutions, convictions, and named perpetrators
+- Specific statistics with named sources and dates
+- Operational outcomes with verified numbers
+- Legislative or policy changes with enforcement teeth
+- Push-factor interventions addressing root vulnerability
+
+TREAT WITH SCEPTICISM - flag these explicitly:
+- Mass sensitisation campaigns where reach is mistaken for impact
+- Interventions that show survivor numbers without survivor outcomes
+- Claims without a named source, date, or methodology
+
+ALWAYS:
+- Distinguish trafficking from smuggling precisely (trafficking = exploitation is the purpose, crime continues at destination; smuggling = facilitated border crossing, crime ends at destination)
+- Name specific geographies - Ghana and Nigeria are primary focus, then wider West Africa
+- Name specific enforcement agencies where relevant (NAPTIP in Nigeria, EOCO in Ghana)
+- Note when evidence is from a single source only
+- Note gaps - what the research does not address
+- Use plain declarative sentences. No hedging. No throat-clearing.
 - Maximum 4 paragraphs
+- Cite sources using [number] notation inline
 
 Research question: {query}
 
@@ -771,6 +789,64 @@ def similar_route():
             })
 
         return jsonify({"ok": True, "source_title": title, "documents": results})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/documents", methods=["GET"])
+def documents_route():
+    """
+    Full corpus browser - returns all documents deduplicated by filename.
+    Supports optional ?category= and ?q= (title search) query params.
+    """
+    category = request.args.get("category", "All").strip()
+    q        = request.args.get("q", "").strip().lower()
+
+    try:
+        qdrant = get_qdrant_client()
+        filt   = None
+        if category and category != "All":
+            filt = qm.Filter(
+                must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
+            )
+        # Scroll enough to cover the full corpus (one chunk per doc is all we need)
+        records, _ = qdrant.scroll(
+            collection_name=QDRANT_COLLECTION,
+            scroll_filter=filt,
+            limit=5000,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        # Deduplicate by filename - keep first chunk encountered
+        seen = {}
+        for r in records:
+            p  = dict(r.payload or {})
+            fn = p.get("filename", "")
+            if fn and fn not in seen:
+                seen[fn] = p
+
+        docs = list(seen.values())
+
+        # Filter by title search if provided
+        if q:
+            docs = [d for d in docs if q in (d.get("title") or d.get("filename") or "").lower()
+                    or q in (d.get("authors") or "").lower()]
+
+        # Sort alphabetically by title
+        docs.sort(key=lambda d: (d.get("title") or d.get("filename") or "").lower())
+
+        results = [{
+            "title":    d.get("title") or d.get("filename") or "Unknown",
+            "authors":  d.get("authors") or "",
+            "year":     d.get("year") or "",
+            "category": d.get("category") or "",
+            "filename": d.get("filename") or "",
+            "pdf_url":  pdf_url_for_filename(d.get("filename") or ""),
+        } for d in docs]
+
+        return jsonify({"ok": True, "total": len(results), "documents": results})
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

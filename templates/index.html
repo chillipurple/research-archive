@@ -73,6 +73,86 @@ header {
   display: none;
 }
 
+/* Discover tabs */
+.discover-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.discover-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 16px 8px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+.discover-tab:hover { color: var(--light-purple); }
+.discover-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+/* Document browser */
+.docs-search-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.docs-search-input {
+  flex: 1;
+  min-width: 200px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--off-white);
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 0.88rem;
+  padding: 8px 12px;
+}
+.docs-search-input::placeholder { color: var(--text-muted); }
+.docs-search-input:focus { outline: none; border-color: var(--mid-purple); }
+.docs-cat-select {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--off-white);
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 0.85rem;
+  padding: 8px 32px 8px 12px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238B388D' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 10px;
+  cursor: pointer;
+}
+.docs-cat-select:focus { outline: none; border-color: var(--mid-purple); }
+.docs-count { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 10px; font-style: italic; }
+.doc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(139,56,141,0.1);
+  flex-wrap: wrap;
+}
+.doc-row:last-child { border-bottom: none; }
+.doc-row-title { flex: 1; font-size: 0.88rem; color: var(--off-white); line-height: 1.35; min-width: 180px; }
+.doc-row-meta  { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.doc-row-cat   { font-size: 0.68rem; color: var(--light-purple); background: rgba(139,56,141,0.15);
+                 border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px;
+                 white-space: nowrap; flex-shrink: 0; }
+.doc-row-pdf   { color: var(--gold); font-size: 0.78rem; font-weight: 600; text-decoration: none;
+                 white-space: nowrap; flex-shrink: 0; }
+.doc-row-pdf:hover { text-decoration: underline; }
+
 .discover-cats {
   display: flex;
   flex-wrap: wrap;
@@ -621,11 +701,45 @@ select:focus { outline: none; border-color: var(--mid-purple); }
 
   <div class="accent-bar"></div>
 
-  <!-- Discovery mode panel -->
+  <!-- Discovery / Document browser panel -->
   <div class="discover-panel" id="discoverPanel">
-    <div class="panel-label" style="margin-bottom:14px;">Browse by Category</div>
-    <div class="discover-cats" id="discoverCats"></div>
-    <div id="discoverResults"></div>
+    <div class="discover-tabs">
+      <button class="discover-tab active" id="tabBrowse" onclick="switchTab('browse')">Browse by category</button>
+      <button class="discover-tab" id="tabDocs" onclick="switchTab('docs')">All documents</button>
+    </div>
+
+    <!-- Browse tab -->
+    <div id="browsePane">
+      <div class="discover-cats" id="discoverCats"></div>
+      <div id="discoverResults"></div>
+    </div>
+
+    <!-- Documents tab -->
+    <div id="docsPane" style="display:none">
+      <div class="docs-search-bar">
+        <input type="text" id="docsSearchInput" class="docs-search-input"
+          placeholder="Filter by title or author..."
+          oninput="filterDocs()" />
+        <select id="docsCatFilter" class="docs-cat-select" onchange="filterDocs()">
+          <option value="All">All categories</option>
+          <option>Ghana</option>
+          <option>Nigeria</option>
+          <option>West Africa Regional</option>
+          <option>Gulf and Middle East</option>
+          <option>Child Trafficking and Exploitation</option>
+          <option>Sex Trafficking and Sex Work</option>
+          <option>Education and Prevention</option>
+          <option>Survivor Experience and Response</option>
+          <option>Digital Threats and Scamming</option>
+          <option>Legal and Policy Frameworks</option>
+          <option>UN and International Bodies</option>
+          <option>Research and Data</option>
+          <option>Tamale and Northern Ghana</option>
+        </select>
+      </div>
+      <div class="docs-count" id="docsCount"></div>
+      <div id="docsList"></div>
+    </div>
   </div>
 
   <div class="history-panel" id="historyPanel">
@@ -811,6 +925,96 @@ async function doSearch() {
   }
   btn.disabled = false;
   loading.style.display = 'none';
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+let _currentTab = 'browse';
+let _allDocs    = [];   // cached full document list
+
+function switchTab(tab) {
+  _currentTab = tab;
+  document.getElementById('tabBrowse').classList.toggle('active', tab === 'browse');
+  document.getElementById('tabDocs').classList.toggle('active', tab === 'docs');
+  document.getElementById('browsePane').style.display = tab === 'browse' ? 'block' : 'none';
+  document.getElementById('docsPane').style.display   = tab === 'docs'   ? 'block' : 'none';
+  if (tab === 'docs' && !_allDocs.length) _loadAllDocs();
+}
+
+// ── Document browser ──────────────────────────────────────────────────────────
+
+async function _loadAllDocs() {
+  document.getElementById('docsList').innerHTML  = '<div class="discover-loading">Loading all documents...</div>';
+  document.getElementById('docsCount').textContent = '';
+  try {
+    const res  = await fetch('/documents');
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    _allDocs = data.documents;
+    _renderDocList(_allDocs);
+  } catch(e) {
+    document.getElementById('docsList').innerHTML = '<div class="discover-loading">Failed to load: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function filterDocs() {
+  if (!_allDocs.length) return;
+  const q   = document.getElementById('docsSearchInput').value.trim().toLowerCase();
+  const cat = document.getElementById('docsCatFilter').value;
+  const filtered = _allDocs.filter(d => {
+    const matchCat = cat === 'All' || d.category === cat;
+    const matchQ   = !q
+      || (d.title   || '').toLowerCase().includes(q)
+      || (d.authors || '').toLowerCase().includes(q);
+    return matchCat && matchQ;
+  });
+  _renderDocList(filtered);
+}
+
+function _renderDocList(docs) {
+  const count = document.getElementById('docsCount');
+  const list  = document.getElementById('docsList');
+  count.textContent = docs.length + ' document' + (docs.length !== 1 ? 's' : '');
+  list.innerHTML = '';
+
+  if (!docs.length) {
+    list.innerHTML = '<div class="discover-loading">No documents match.</div>';
+    return;
+  }
+
+  docs.forEach(doc => {
+    const row = document.createElement('div');
+    row.className = 'doc-row';
+
+    const title = document.createElement('div');
+    title.className   = 'doc-row-title';
+    title.textContent = doc.title || 'Unknown';
+
+    const meta = document.createElement('div');
+    meta.className = 'doc-row-meta';
+    const metaParts = [doc.authors, doc.year].filter(Boolean);
+    meta.textContent = metaParts.join(' · ');
+
+    const cat = document.createElement('span');
+    cat.className   = 'doc-row-cat';
+    cat.textContent = doc.category || '';
+
+    const children = [title, meta];
+    if (doc.category) children.push(cat);
+
+    if (doc.pdf_url) {
+      const pdf = document.createElement('a');
+      pdf.className   = 'doc-row-pdf';
+      pdf.href        = doc.pdf_url;
+      pdf.target      = '_blank';
+      pdf.rel         = 'noopener noreferrer';
+      pdf.textContent = 'View PDF';
+      children.push(pdf);
+    }
+
+    row.append(...children);
+    list.appendChild(row);
+  });
 }
 
 // ── Corpus statistics ─────────────────────────────────────────────────────────
