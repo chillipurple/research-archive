@@ -852,49 +852,6 @@ def documents_route():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/documents", methods=["GET"])
-def documents_route():
-    """Full corpus browser - all documents deduplicated by filename."""
-    category = request.args.get("category", "All").strip()
-    q        = request.args.get("q", "").strip().lower()
-    try:
-        qdrant = get_qdrant_client()
-        filt   = None
-        if category and category != "All":
-            filt = qm.Filter(
-                must=[qm.FieldCondition(key="category", match=qm.MatchValue(value=category))]
-            )
-        records, _ = qdrant.scroll(
-            collection_name=QDRANT_COLLECTION,
-            scroll_filter=filt,
-            limit=5000,
-            with_payload=True,
-            with_vectors=False,
-        )
-        seen = {}
-        for r in records:
-            p  = dict(r.payload or {})
-            fn = p.get("filename", "")
-            if fn and fn not in seen:
-                seen[fn] = p
-        docs = list(seen.values())
-        if q:
-            docs = [d for d in docs if q in (d.get("title") or d.get("filename") or "").lower()
-                    or q in (d.get("authors") or "").lower()]
-        docs.sort(key=lambda d: (d.get("title") or d.get("filename") or "").lower())
-        results = [{
-            "title":    d.get("title") or d.get("filename") or "Unknown",
-            "authors":  d.get("authors") or "",
-            "year":     d.get("year") or "",
-            "category": d.get("category") or "",
-            "filename": d.get("filename") or "",
-            "pdf_url":  pdf_url_for_filename(d.get("filename") or ""),
-        } for d in docs]
-        return jsonify({"ok": True, "total": len(results), "documents": results})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
 @app.route("/discover", methods=["POST"])
 def discover_route():
     """
