@@ -231,12 +231,12 @@ header {
 .docs-count { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 10px; font-style: italic; }
 .doc-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   grid-template-rows: auto auto;
-  gap: 0 12px;
-  padding: 10px 0;
+  gap: 2px 14px;
+  padding: 12px 0;
   border-bottom: 1px solid rgba(139,56,141,0.1);
-  align-items: center;
+  align-items: start;
 }
 .doc-row:last-child { border-bottom: none; }
 .doc-row-title {
@@ -245,13 +245,19 @@ header {
   font-size: 0.88rem;
   color: var(--off-white);
   line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .doc-row-meta {
   grid-column: 1;
   grid-row: 2;
   font-size: 0.75rem;
   color: var(--text-muted);
-  margin-top: 2px;
+  line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .doc-row-cat {
   grid-column: 2;
@@ -264,6 +270,10 @@ header {
   padding: 2px 8px;
   white-space: nowrap;
   align-self: center;
+  justify-self: end;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .doc-row-pdf {
   grid-column: 3;
@@ -274,8 +284,19 @@ header {
   text-decoration: none;
   white-space: nowrap;
   align-self: center;
+  justify-self: end;
 }
 .doc-row-pdf:hover { text-decoration: underline; }
+
+@media (max-width: 720px) {
+  .doc-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .doc-row-title { grid-column: 1 / -1; grid-row: 1; }
+  .doc-row-meta  { grid-column: 1 / -1; grid-row: 2; }
+  .doc-row-cat   { grid-column: 1; grid-row: 3; justify-self: start; margin-top: 6px; }
+  .doc-row-pdf   { grid-column: 2; grid-row: 3; margin-top: 6px; }
+}
 
 .discover-cats {
   display: flex;
