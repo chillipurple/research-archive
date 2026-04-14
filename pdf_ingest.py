@@ -323,12 +323,18 @@ def embed_pdf_to_qdrant(
     return total
 
 
-def ingest_pdf(local_path: Path, filename: str) -> Dict[str, Any]:
+def ingest_pdf(local_path: Path, filename: str, meta_override: dict | None = None) -> Dict[str, Any]:
     """
     Upload to R2, Google Drive, then embed to Qdrant. Returns step log and chunk count.
+    meta_override: if provided, these fields (full_title, authors, year, category)
+    take precedence over CSV metadata.
     """
     steps: List[Dict[str, Any]] = []
     meta = metadata_row_for_filename(filename)
+    if meta_override:
+        for k, v in meta_override.items():
+            if v:  # only override with non-empty values
+                meta[k] = v
 
     try:
         r2_uri = upload_r2(local_path, filename)

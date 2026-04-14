@@ -995,12 +995,20 @@ def admin_upload():
     if not filename.lower().endswith(".pdf"):
         return jsonify({"ok": False, "error": "Only PDF files are allowed", "steps": []}), 400
 
+    # Collect optional metadata from form fields
+    meta_override = {}
+    for field, key in [("title", "full_title"), ("authors", "authors"),
+                       ("year", "year"), ("category", "category")]:
+        val = request.form.get(field, "").strip()
+        if val:
+            meta_override[key] = val
+
     tmp     = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     tmp_path = Path(tmp.name)
     try:
         tmp.close()
         f.save(tmp_path)
-        result = ingest_pdf(tmp_path, filename)
+        result = ingest_pdf(tmp_path, filename, meta_override=meta_override or None)
         code   = 200 if result.get("ok") else 500
         if result.get("ok"):
             _invalidate_bm25_cache()
@@ -1016,6 +1024,87 @@ def admin_upload():
             tmp_path.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+@app.route("/admin/api/documents", methods=["GET"])
+def admin_documents():
+    """List all documents in Qdrant for admin management."""
+    try:
+        qdrant = get_qdrant_client()
+        all_records = []
+        offset = None
+        while True:
+            batch, offset = qdrant.scroll(
+                collection_name=QDRANT_COLLECTION,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            all_records.extend(batch)
+            if offset is None:
+                break
+
+        # Deduplicate by filename, count chunks per document
+        docs = {}
+        for r in all_records:
+            p = dict(r.payload or {})
+            fn = p.get("filename", "")
+            if not fn:
+                continue
+            if fn not in docs:
+                docs[fn] = {
+                    "filename": fn,
+                    "title": p.get("title") or fn,
+                    "authors": p.get("authors") or "",
+                    "year": p.get("year") or "",
+                    "category": p.get("category") or "",
+                    "chunks": 0,
+                }
+            docs[fn]["chunks"] += 1
+
+        doc_list = sorted(docs.values(), key=lambda d: d["title"].lower())
+        return jsonify({"ok": True, "total": len(doc_list), "documents": doc_list})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/admin/api/delete", methods=["POST"])
+def admin_delete():
+    """Delete a document from Qdrant by filename."""
+    data = request.get_json()
+    filename = (data or {}).get("filename", "").strip()
+    if not filename:
+        return jsonify({"ok": False, "error": "No filename provided"}), 400
+
+    try:
+        qdrant = get_qdrant_client()
+        # Count chunks before deletion
+        scroll_result, _ = qdrant.scroll(
+            collection_name=QDRANT_COLLECTION,
+            scroll_filter=qm.Filter(
+                must=[qm.FieldCondition(key="filename", match=qm.MatchValue(value=filename))]
+            ),
+            limit=1,
+            with_payload=False,
+            with_vectors=False,
+        )
+        if not scroll_result:
+            return jsonify({"ok": False, "error": f"Document not found: {filename}"}), 404
+
+        qdrant.delete(
+            collection_name=QDRANT_COLLECTION,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(
+                    must=[qm.FieldCondition(key="filename", match=qm.MatchValue(value=filename))]
+                )
+            ),
+        )
+        _invalidate_bm25_cache()
+        _invalidate_docs_cache()
+        return jsonify({"ok": True, "filename": filename})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────

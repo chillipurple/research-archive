@@ -150,6 +150,110 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
   color: #f4c0c0;
   margin-bottom: 20px;
 }
+
+.meta-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+.meta-field label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+  font-family: 'Oswald', sans-serif;
+}
+.meta-field input, .meta-field select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0,0,0,0.3);
+  color: var(--off-white);
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 0.95rem;
+}
+.meta-field input::placeholder { color: var(--text-muted); }
+.meta-field select { cursor: pointer; }
+.meta-field select option { background: #1c0a22; color: var(--off-white); }
+.meta-field.full { grid-column: 1 / -1; }
+
+.doc-list {
+  max-height: 500px;
+  overflow-y: auto;
+  margin-top: 12px;
+}
+.doc-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(139,56,141,0.12);
+  gap: 12px;
+}
+.doc-item:hover { background: rgba(139,56,141,0.08); }
+.doc-info { flex: 1; min-width: 0; }
+.doc-title { font-weight: 600; color: var(--light-purple); font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+.doc-chunks { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; margin-left: 8px; }
+
+button.btn-danger {
+  background: rgba(200,50,50,0.6);
+  border: none;
+  border-radius: 5px;
+  color: var(--off-white);
+  font-family: 'Oswald', sans-serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button.btn-danger:hover { background: rgba(200,50,50,0.85); }
+button.btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.doc-search {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0,0,0,0.3);
+  color: var(--off-white);
+  font-family: 'Source Sans Pro', sans-serif;
+  font-size: 0.95rem;
+  margin-bottom: 8px;
+}
+.doc-search::placeholder { color: var(--text-muted); }
+.doc-count { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 8px; }
+
+.confirm-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.confirm-box {
+  background: #1c0a22;
+  border: 1px solid var(--mid-purple);
+  border-radius: 10px;
+  padding: 28px;
+  max-width: 460px;
+  width: 90%;
+}
+.confirm-box h3 { color: var(--gold); font-family: 'Oswald', sans-serif; margin-bottom: 12px; font-size: 1.1rem; }
+.confirm-box p { font-size: 0.95rem; margin-bottom: 18px; line-height: 1.4; }
+.confirm-box .filename { color: var(--light-purple); font-weight: 600; word-break: break-all; }
+.confirm-actions { display: flex; gap: 12px; justify-content: flex-end; }
+.confirm-actions button { padding: 8px 20px; border-radius: 6px; border: none; cursor: pointer; font-family: 'Oswald', sans-serif; font-size: 0.9rem; letter-spacing: 0.08em; }
+.confirm-cancel { background: rgba(255,255,255,0.1); color: var(--off-white); }
+.confirm-cancel:hover { background: rgba(255,255,255,0.2); }
+.confirm-delete { background: rgba(200,50,50,0.7); color: var(--off-white); }
+.confirm-delete:hover { background: rgba(200,50,50,0.9); }
 </style>
 </head>
 <body>
@@ -197,6 +301,40 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
     </div>
     <input type="file" id="fileInput" accept="application/pdf,.pdf">
 
+    <div class="meta-fields" id="metaFields" style="display:none;">
+      <div class="meta-field full">
+        <label>Document title</label>
+        <input type="text" id="metaTitle" placeholder="Leave blank to use filename">
+      </div>
+      <div class="meta-field">
+        <label>Authors</label>
+        <input type="text" id="metaAuthors" placeholder="e.g. Smith, J. and Jones, K.">
+      </div>
+      <div class="meta-field">
+        <label>Year</label>
+        <input type="text" id="metaYear" placeholder="e.g. 2024" maxlength="4">
+      </div>
+      <div class="meta-field full">
+        <label>Category</label>
+        <select id="metaCategory">
+          <option value="">Select a category</option>
+          <option value="Ghana">Ghana</option>
+          <option value="Nigeria">Nigeria</option>
+          <option value="West Africa Regional">West Africa Regional</option>
+          <option value="Gulf and Middle East">Gulf and Middle East</option>
+          <option value="Child Trafficking and Exploitation">Child Trafficking and Exploitation</option>
+          <option value="Sex Trafficking and Sex Work">Sex Trafficking and Sex Work</option>
+          <option value="Education and Prevention">Education and Prevention</option>
+          <option value="Survivor Experience and Response">Survivor Experience and Response</option>
+          <option value="Digital Threats and Scamming">Digital Threats and Scamming</option>
+          <option value="Legal and Policy Frameworks">Legal and Policy Frameworks</option>
+          <option value="UN and International Bodies">UN and International Bodies</option>
+          <option value="Research and Data">Research and Data</option>
+          <option value="Tamale and Northern Ghana">Tamale and Northern Ghana</option>
+        </select>
+      </div>
+    </div>
+
     <div class="progress-wrap" id="progressWrap">
       <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
       <div class="progress-label" id="progressLabel">Uploading…</div>
@@ -205,6 +343,18 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
     <div class="messages" id="messages"></div>
     <button type="button" class="btn" id="uploadBtn" disabled>Upload</button>
   </div>
+</div>
+
+  <div class="panel">
+    <div class="panel-label">Document Management</div>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:12px;">
+      View and manage documents in the corpus. Delete removes all chunks from Qdrant (does not remove from R2 or Google Drive).
+    </p>
+    <input type="text" class="doc-search" id="docSearch" placeholder="Search documents by title or author...">
+    <div class="doc-count" id="docCount"></div>
+    <div class="doc-list" id="docList"></div>
+  </div>
+
 </div>
 
 <script>
@@ -223,6 +373,7 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
   const maxMb = {{ max_mb }};
 
   let selectedFile = null;
+  let allDocs = [];
 
   function loadStatus() {
     fetch('/admin/api/status')
@@ -275,6 +426,7 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
     selectedFile = f;
     uploadBtn.disabled = !ingestAvailable || !uploadReady || !f;
     setMessages('<div class="msg ok">Selected: <strong>' + escapeHtml(f.name) + '</strong> (' + formatSize(f.size) + ')</div>');
+    document.getElementById('metaFields').style.display = f ? 'grid' : 'none';
   }
 
   function escapeHtml(s) {
@@ -296,6 +448,14 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
     if (!selectedFile || !uploadReady) return;
     const fd = new FormData();
     fd.append('file', selectedFile, selectedFile.name);
+    const metaTitle = document.getElementById('metaTitle').value.trim();
+    const metaAuthors = document.getElementById('metaAuthors').value.trim();
+    const metaYear = document.getElementById('metaYear').value.trim();
+    const metaCategory = document.getElementById('metaCategory').value;
+    if (metaTitle) fd.append('title', metaTitle);
+    if (metaAuthors) fd.append('authors', metaAuthors);
+    if (metaYear) fd.append('year', metaYear);
+    if (metaCategory) fd.append('category', metaCategory);
 
     progressWrap.classList.add('visible');
     progressFill.style.width = '0%';
@@ -327,6 +487,14 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
           html += '<div class="msg ok"><strong>Done.</strong> ' + (data.chunks_upserted || 0) + ' chunks upserted to Qdrant.</div>';
           setMessages(html);
           loadStatus();
+          loadDocuments();
+          // Clear metadata fields
+          document.getElementById('metaTitle').value = '';
+          document.getElementById('metaAuthors').value = '';
+          document.getElementById('metaYear').value = '';
+          document.getElementById('metaCategory').value = '';
+          document.getElementById('metaFields').style.display = 'none';
+          selectedFile = null;
         } else {
           let html = '';
           (data.steps || []).forEach(s => {
@@ -347,6 +515,126 @@ button.btn:disabled { background: #3a1f3d; color: var(--text-muted); cursor: not
     };
     xhr.send(fd);
   });
+
+  // ── Document management ──────────────────────────────────────────────────
+  const docSearch = document.getElementById('docSearch');
+  const docCount = document.getElementById('docCount');
+  const docList = document.getElementById('docList');
+
+  function loadDocuments() {
+    docList.innerHTML = '<div style="color:var(--text-muted);padding:12px;">Loading documents...</div>';
+    fetch('/admin/api/documents')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          allDocs = data.documents || [];
+          renderDocuments(allDocs);
+        } else {
+          docList.innerHTML = '<div class="msg fail">' + escapeHtml(data.error || 'Failed to load') + '</div>';
+        }
+      })
+      .catch(() => {
+        docList.innerHTML = '<div class="msg fail">Failed to load documents.</div>';
+      });
+  }
+
+  function renderDocuments(docs) {
+    docCount.textContent = docs.length + ' document' + (docs.length !== 1 ? 's' : '');
+    if (!docs.length) {
+      docList.innerHTML = '<div style="color:var(--text-muted);padding:12px;">No documents found.</div>';
+      return;
+    }
+    docList.innerHTML = '';
+    docs.forEach(d => {
+      const item = document.createElement('div');
+      item.className = 'doc-item';
+
+      const info = document.createElement('div');
+      info.className = 'doc-info';
+      const title = document.createElement('div');
+      title.className = 'doc-title';
+      title.textContent = d.title || d.filename;
+      title.title = d.filename;
+      info.appendChild(title);
+
+      const metaParts = [];
+      if (d.authors) metaParts.push(d.authors);
+      if (d.year) metaParts.push(d.year);
+      if (d.category) metaParts.push(d.category);
+      if (metaParts.length) {
+        const meta = document.createElement('div');
+        meta.className = 'doc-meta';
+        meta.textContent = metaParts.join(' \u00b7 ');
+        info.appendChild(meta);
+      }
+
+      const chunks = document.createElement('div');
+      chunks.className = 'doc-chunks';
+      chunks.textContent = d.chunks + ' chunk' + (d.chunks !== 1 ? 's' : '');
+
+      const btn = document.createElement('button');
+      btn.className = 'btn-danger';
+      btn.textContent = 'Delete';
+      btn.onclick = () => confirmDelete(d.filename, d.title || d.filename);
+
+      item.append(info, chunks, btn);
+      docList.appendChild(item);
+    });
+  }
+
+  docSearch.addEventListener('input', () => {
+    const q = docSearch.value.trim().toLowerCase();
+    if (!q) { renderDocuments(allDocs); return; }
+    const filtered = allDocs.filter(d =>
+      (d.title || '').toLowerCase().includes(q) ||
+      (d.authors || '').toLowerCase().includes(q) ||
+      (d.filename || '').toLowerCase().includes(q) ||
+      (d.category || '').toLowerCase().includes(q)
+    );
+    renderDocuments(filtered);
+  });
+
+  function confirmDelete(filename, title) {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML =
+      '<div class="confirm-box">' +
+        '<h3>Delete document</h3>' +
+        '<p>This will permanently remove all chunks for<br><span class="filename">' + escapeHtml(title) + '</span><br>from the search index.</p>' +
+        '<p style="font-size:0.85rem;color:var(--text-muted);">The PDF will remain in R2 storage and Google Drive.</p>' +
+        '<div class="confirm-actions">' +
+          '<button class="confirm-cancel" id="confirmCancel">Cancel</button>' +
+          '<button class="confirm-delete" id="confirmDelete">Delete</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('#confirmCancel').onclick = () => overlay.remove();
+    overlay.querySelector('#confirmDelete').onclick = () => {
+      overlay.querySelector('#confirmDelete').disabled = true;
+      overlay.querySelector('#confirmDelete').textContent = 'Deleting...';
+      fetch('/admin/api/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          overlay.remove();
+          if (data.ok) {
+            loadStatus();
+            loadDocuments();
+          } else {
+            alert('Delete failed: ' + (data.error || 'Unknown error'));
+          }
+        })
+        .catch(() => {
+          overlay.remove();
+          alert('Delete failed: network error');
+        });
+    };
+  }
+
+  loadDocuments();
 })();
 </script>
 </body>
